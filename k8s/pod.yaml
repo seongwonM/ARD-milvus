@@ -13,11 +13,19 @@ spec:
       command: ["/bin/sh", "-c"]
       args:
         - |
-          git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/SH-ARD-embedding-develop.git /tmp/data &&
+          git clone https://github.com/seongwonM/SH-ARD-embedding-develop.git /tmp/data &&
           python -m milvus_migration.bench.runner \
             --data-root /tmp/data/data \
-            --out /results \
-            --search-concurrency 1 4 8 16
+            --out /tmp/results \
+            --search-concurrency 1 4 8 16 &&
+          git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
+          cp /tmp/results/*.json /tmp/repo/results/ &&
+          cd /tmp/repo &&
+          git config user.email "bench-bot@pod" &&
+          git config user.name "bench-bot" &&
+          git add results/ &&
+          git commit -m "bench: add results $(date +%Y%m%d_%H%M%S)" &&
+          git push
       env:
         - name: MILVUS_URI
           value: "http://milvus:19530"
