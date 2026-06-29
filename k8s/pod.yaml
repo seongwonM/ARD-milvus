@@ -40,9 +40,9 @@ spec:
         - name: EMBEDDING_DIM
           value: "1024"
         - name: EMBEDDING_BATCH_SIZE
-          value: "4096"
+          value: "2048"
         - name: EMBEDDING_TIMEOUT
-          value: "60"
+          value: "120"
         - name: MILVUS_TOKEN
           valueFrom:
             secretKeyRef:
