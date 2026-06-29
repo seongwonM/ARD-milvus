@@ -133,6 +133,10 @@ def run_bench(
         "vector_mode":         vector_mode,
         "dim":                 dim,
         "api_endpoint":        cfg.embedding.endpoint,
+        "batch_size":          batch_size,
+        "timeout_sec":         cfg.embedding.timeout,
+        "n_docs":              len(docs),
+        "n_queries":           len(queries),
         "index_build_sec":     index_build_sec,
         "index_docs_per_sec":  index_docs_per_sec,
         "query_encode_sec":    query_encode_sec,
@@ -179,7 +183,9 @@ def _build_index(
         if len(pending) >= MILVUS_INSERT_BATCH:
             store._insert_with_retry(collection, pending)
             pending.clear()
-            print(f"  인덱싱: {pid:,}/{n_total:,}", flush=True)
+            elapsed = round(time.time() - t0, 1)
+            dps_now = round(pid / elapsed, 1) if elapsed > 0 else 0
+            print(f"  인덱싱: {pid:,}/{n_total:,}  elapsed={elapsed}s  ({dps_now} docs/s)", flush=True)
 
     if pending:
         store._insert_with_retry(collection, pending)
@@ -261,8 +267,19 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
     cfg = Config.from_env()
 
-    print(f"[설정] 모델={cfg.embedding.model}  dim={cfg.embedding.dim}  mode={args.vector_mode}")
-    print(f"[설정] API={cfg.embedding.endpoint}  Milvus={cfg.milvus.uri}")
+    bench_start = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n{'='*64}")
+    print(f"  벤치마크 시작: {bench_start}")
+    print(f"  모델:          {cfg.embedding.model}")
+    print(f"  dim:           {cfg.embedding.dim}")
+    print(f"  vector_mode:   {args.vector_mode}")
+    print(f"  API endpoint:  {cfg.embedding.endpoint}")
+    print(f"  batch_size:    {cfg.embedding.batch_size}")
+    print(f"  timeout:       {cfg.embedding.timeout}s")
+    print(f"  Milvus URI:    {cfg.milvus.uri}")
+    print(f"  data_root:     {args.data_root}")
+    print(f"  concurrency:   {args.search_concurrency}")
+    print(f"{'='*64}\n")
 
     docs, queries, qrels = load_from_dir(args.data_root)
 
