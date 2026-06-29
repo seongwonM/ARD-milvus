@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ard-milvus
+  labels:
+    app: ard-milvus
+spec:
+  restartPolicy: Never
+  containers:
+    - name: ard-milvus
+      image: ghcr.io/seongwonm/ard-milvus:latest
+      imagePullPolicy: Always
+      command: ["sleep", "infinity"]
+      env:
+        - name: MILVUS_URI
+          value: "http://milvus:19530"
+        - name: MILVUS_COLLECTION
+          value: "documents"
+        - name: EMBEDDING_API_ENDPOINT
+          value: "https://api.company.internal/v1/embeddings"
+        - name: EMBEDDING_MODEL
+          value: "bge-m3"
+        - name: EMBEDDING_DIM
+          value: "1024"
+        - name: EMBEDDING_BATCH_SIZE
+          value: "64"
+        - name: EMBEDDING_TIMEOUT
+          value: "60"
+        - name: MILVUS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: milvus-migration-secret
+              key: MILVUS_TOKEN
+        - name: EMBEDDING_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: milvus-migration-secret
+              key: EMBEDDING_API_KEY
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "512Mi"
