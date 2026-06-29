@@ -13,9 +13,8 @@ spec:
       command: ["/bin/sh", "-c"]
       args:
         - |
-          git clone https://github.com/seongwonM/SH-ARD-embedding-develop.git /tmp/data &&
           python -m milvus_migration.bench.runner \
-            --data-root /tmp/data/data \
+            --data-root /data \
             --out /tmp/results \
             --search-concurrency 1 4 8 16 &&
           git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
