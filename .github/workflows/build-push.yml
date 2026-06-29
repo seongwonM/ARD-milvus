@@ -7,6 +7,8 @@ on:
       - "Dockerfile"
       - "requirements.txt"
       - "milvus_migration/**"
+      - "bench/**"
+      - "data/**"
       - ".github/workflows/build-push.yml"
   workflow_dispatch:
 
