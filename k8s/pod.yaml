@@ -8,7 +8,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: ard-milvus
-      image: ghcr.io/seongwonm/ard-milvus:e517c9d58b09eae655396d17e76b063c4396b2e1
+      image: ghcr.io/seongwonm/ard-milvus:ef6442f356e3f975a6dc6aca8833e20b7c7d01f1
       imagePullPolicy: Always
       command: ["/bin/sh", "-c"]
       args:
