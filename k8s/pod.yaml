@@ -31,7 +31,10 @@ spec:
         - name: MILVUS_COLLECTION
           value: "documents"
         - name: EMBEDDING_API_ENDPOINT
-          value: "https://api.company.internal/v1/embeddings"
+          valueFrom:
+            secretKeyRef:
+              name: milvus-migration-secret
+              key: EMBEDDING_API_ENDPOINT
         - name: EMBEDDING_MODEL
           value: "bge-m3"
         - name: EMBEDDING_DIM
