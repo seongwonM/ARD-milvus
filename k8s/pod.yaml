@@ -10,7 +10,14 @@ spec:
     - name: ard-milvus
       image: ghcr.io/seongwonm/ard-milvus:fda413c0dfdf2de18d75a4d462529c8e858a3b19
       imagePullPolicy: Always
-      command: ["sleep", "infinity"]
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/SH-ARD-embedding-develop.git /tmp/data &&
+          python -m milvus_migration.bench.runner \
+            --data-root /tmp/data/data \
+            --out /results \
+            --search-concurrency 1 4 8 16
       env:
         - name: MILVUS_URI
           value: "http://milvus:19530"
@@ -31,6 +38,11 @@ spec:
             secretKeyRef:
               name: milvus-migration-secret
               key: MILVUS_TOKEN
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: milvus-migration-secret
+              key: GITHUB_TOKEN
         - name: EMBEDDING_API_KEY
           valueFrom:
             secretKeyRef:
