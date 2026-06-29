@@ -8,7 +8,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: ard-milvus
-      image: ghcr.io/seongwonm/ard-milvus:REPLACE_WITH_SHA
+      image: ghcr.io/seongwonm/ard-milvus:1c64b7cf870ea319dcd4c6ae49c71ab328abc618
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
       env:
