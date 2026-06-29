@@ -19,7 +19,7 @@ metadata:
 spec:
   containers:
     - name: milvus
-      image: milvusdb/milvus:v2.4.13
+      image: milvusdb/milvus:v2.4.24
       command: ["milvus", "run", "standalone"]
       env:
         - name: ETCD_USE_EMBED
