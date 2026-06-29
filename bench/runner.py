@@ -273,6 +273,28 @@ def main() -> None:
 
     print(f"\n결과 저장: {out_path}")
 
+    # ── stdout 출력 ───────────────────────────────────────────────────────────
+    print("\n===== BENCH RESULT JSON =====")
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=_json_default))
+    print("===== END =====")
+
+    # ── MinIO 업로드 ──────────────────────────────────────────────────────────
+    minio_endpoint   = os.getenv("MINIO_ENDPOINT", "minio:9000")
+    minio_access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+    minio_secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    bucket           = os.getenv("MINIO_BUCKET", "bench-results")
+    try:
+        from minio import Minio
+        mc = Minio(minio_endpoint, access_key=minio_access_key,
+                   secret_key=minio_secret_key, secure=False)
+        if not mc.bucket_exists(bucket):
+            mc.make_bucket(bucket)
+        object_name = os.path.basename(out_path)
+        mc.fput_object(bucket, object_name, out_path, content_type="application/json")
+        print(f"MinIO 업로드 완료: {minio_endpoint}/{bucket}/{object_name}")
+    except Exception as e:
+        print(f"MinIO 업로드 실패 (무시): {e}")
+
 
 if __name__ == "__main__":
     main()
