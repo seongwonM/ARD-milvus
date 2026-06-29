@@ -144,6 +144,9 @@ def run_bench(
     }
 
 
+MILVUS_INSERT_BATCH = 5_000
+
+
 def _build_index(
     store:       MilvusStore,
     client:      EmbeddingClient,
@@ -156,25 +159,31 @@ def _build_index(
     store.create_collection(collection, dim=dim, vector_mode=vector_mode)
     doc_ids = list(docs.keys())
     n_total = len(doc_ids)
-    CHUNK   = 2_000
 
     t0 = time.time()
     pid = 0
-    for start in range(0, n_total, CHUNK):
-        chunk_ids = doc_ids[start : start + CHUNK]
+    pending: list[dict] = []
+
+    for start in range(0, n_total, batch_size):
+        chunk_ids = doc_ids[start : start + batch_size]
         texts = [
             f"{docs[d].get('title', '')} {docs[d]['chunk']}".strip()
             for d in chunk_ids
         ]
         embs = client.encode(texts, batch_size=batch_size)
 
-        rows = []
         for doc_id, vec in zip(chunk_ids, embs):
-            rows.append({"id": pid, "doc_id": doc_id, "vector": vec.tolist()})
+            pending.append({"id": pid, "doc_id": doc_id, "vector": vec.tolist()})
             pid += 1
 
-        store._insert_with_retry(collection, rows)
-        print(f"  인덱싱: {min(start+CHUNK, n_total):,}/{n_total:,}", flush=True)
+        if len(pending) >= MILVUS_INSERT_BATCH:
+            store._insert_with_retry(collection, pending)
+            pending.clear()
+            print(f"  인덱싱: {pid:,}/{n_total:,}", flush=True)
+
+    if pending:
+        store._insert_with_retry(collection, pending)
+        print(f"  인덱싱: {pid:,}/{n_total:,}", flush=True)
 
     store.finalize(collection)
     elapsed = round(time.time() - t0, 2)
