@@ -1,0 +1,278 @@
+"""API 기반 임베딩 벤치마크 러너.
+
+사용법:
+    python -m milvus_migration.bench.runner --data-root /data
+    python -m milvus_migration.bench.runner --data-root /data --vector-mode sparse
+    python -m milvus_migration.bench.runner --data-root /data --search-concurrency 1 4 8 16
+
+환경변수 (pod.yaml에서 주입):
+    MILVUS_URI, MILVUS_TOKEN
+    EMBEDDING_API_ENDPOINT, EMBEDDING_API_KEY, EMBEDDING_MODEL, EMBEDDING_DIM
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import time
+
+import numpy as np
+
+from milvus_migration.bench.data_loader import load_from_dir
+from milvus_migration.bench.evaluator import evaluate
+from milvus_migration.config import Config
+from milvus_migration.embedding import EmbeddingClient
+from milvus_migration.milvus_store import MilvusStore
+
+
+def _safe_name(model_id: str) -> str:
+    return re.sub(r"[^a-z0-9_]", "_", model_id.lower())[:200]
+
+
+def _json_default(obj):
+    try:
+        f = float(obj)
+        return None if math.isnan(f) or math.isinf(f) else f
+    except (TypeError, ValueError):
+        return str(obj)
+
+
+def run_bench(
+    cfg:              Config,
+    docs:             dict,
+    queries:          dict,
+    qrels:            dict,
+    vector_mode:      str = "dense",
+    search_concurrency: list[int] | None = None,
+    search_duration:    int = 30,
+) -> dict:
+    store  = MilvusStore(cfg.milvus.uri, cfg.milvus.token)
+    client = EmbeddingClient(cfg.embedding)
+    model_id   = cfg.embedding.model
+    dim        = cfg.embedding.dim
+    batch_size = cfg.embedding.batch_size
+    collection = _safe_name(model_id) + (f"_{vector_mode}" if vector_mode != "dense" else "")
+
+    print(f"\n{'='*64}")
+    print(f"  모델: {model_id}  dim={dim}  mode={vector_mode}")
+    print(f"  컬렉션: {collection}  Milvus: {cfg.milvus.uri}")
+    print(f"{'='*64}")
+
+    # ── 인덱싱 ───────────────────────────────────────────────────────────────
+    n_docs = len(docs)
+    index_build_sec = index_docs_per_sec = None
+
+    if store.has_collection(collection):
+        n_pts = store.collection_size(collection)
+        if n_pts == n_docs:
+            print(f"  [스킵] 인덱스 존재 ({n_pts:,}건)", flush=True)
+        else:
+            print(f"  [재색인] 불완전 ({n_pts:,}/{n_docs:,})", flush=True)
+            store.drop_collection(collection)
+            index_build_sec, index_docs_per_sec = _build_index(
+                store, client, collection, docs, dim, vector_mode, batch_size
+            )
+    else:
+        index_build_sec, index_docs_per_sec = _build_index(
+            store, client, collection, docs, dim, vector_mode, batch_size
+        )
+
+    # ── query 인코딩 ─────────────────────────────────────────────────────────
+    q_ids   = list(queries.keys())
+    q_texts = [queries[qid] for qid in q_ids]
+
+    print(f"  query 인코딩 ({len(q_ids):,}건)...", flush=True)
+    t0 = time.time()
+    q_embs = client.encode(q_texts, batch_size=batch_size)
+    query_encode_sec = round(time.time() - t0, 2)
+    query_encode_qps = round(len(q_ids) / query_encode_sec, 1)
+    print(f"  query 인코딩: {query_encode_sec}s  ({query_encode_qps} q/s)", flush=True)
+
+    # ── 검색 ─────────────────────────────────────────────────────────────────
+    print(f"  검색 (top-100)...", flush=True)
+    t0 = time.time()
+    raw_results = store.search(collection, q_embs, top_k=100, vector_mode=vector_mode)
+    search_sec = round(time.time() - t0, 2)
+    search_qps = round(len(q_ids) / search_sec, 1)
+    print(f"  검색: {search_sec}s  ({search_qps} q/s)", flush=True)
+
+    run = {q_ids[i]: {doc_id: score for doc_id, score in hits}
+           for i, hits in enumerate(raw_results)}
+
+    # ── 평가 ─────────────────────────────────────────────────────────────────
+    metrics = evaluate(run, qrels)
+    print(
+        f"\n  NDCG@10={metrics.get('ndcg_at_10')}  @20={metrics.get('ndcg_at_20')}  "
+        f"@50={metrics.get('ndcg_at_50')}  @100={metrics.get('ndcg_at_100')}"
+    )
+    print(
+        f"  MRR@10={metrics.get('mrr_at_10')}  "
+        f"Recall@10={metrics.get('recall_at_10')}  @50={metrics.get('recall_at_50')}  @100={metrics.get('recall_at_100')}"
+    )
+
+    # ── Concurrent QPS ───────────────────────────────────────────────────────
+    concurrent_results: dict = {}
+    if search_concurrency and vector_mode == "dense":
+        print(f"\n  [concurrent 벤치마크] duration={search_duration}s per level", flush=True)
+        for c in search_concurrency:
+            print(f"  concurrency={c} 시작...", flush=True)
+            stats = _search_concurrent(store, collection, q_embs, top_k=100,
+                                       concurrency=c, duration_sec=search_duration)
+            concurrent_results[str(c)] = stats
+            print(
+                f"  concurrency={c}  QPS={stats['qps']}  "
+                f"p50={stats['p50_ms']}ms  p95={stats['p95_ms']}ms  p99={stats['p99_ms']}ms  "
+                f"(n={stats['total']})",
+                flush=True,
+            )
+
+    return {
+        "model":               model_id,
+        "vector_mode":         vector_mode,
+        "dim":                 dim,
+        "api_endpoint":        cfg.embedding.endpoint,
+        "index_build_sec":     index_build_sec,
+        "index_docs_per_sec":  index_docs_per_sec,
+        "query_encode_sec":    query_encode_sec,
+        "query_encode_qps":    query_encode_qps,
+        "search_sec":          search_sec,
+        "search_qps":          search_qps,
+        "concurrent":          concurrent_results,
+        **metrics,
+    }
+
+
+def _build_index(
+    store:       MilvusStore,
+    client:      EmbeddingClient,
+    collection:  str,
+    docs:        dict,
+    dim:         int,
+    vector_mode: str,
+    batch_size:  int,
+) -> tuple[float, float]:
+    store.create_collection(collection, dim=dim, vector_mode=vector_mode)
+    doc_ids = list(docs.keys())
+    n_total = len(doc_ids)
+    CHUNK   = 2_000
+
+    t0 = time.time()
+    pid = 0
+    for start in range(0, n_total, CHUNK):
+        chunk_ids = doc_ids[start : start + CHUNK]
+        texts = [
+            f"{docs[d].get('title', '')} {docs[d]['chunk']}".strip()
+            for d in chunk_ids
+        ]
+        embs = client.encode(texts, batch_size=batch_size)
+
+        rows = []
+        for doc_id, vec in zip(chunk_ids, embs):
+            rows.append({"id": pid, "doc_id": doc_id, "vector": vec.tolist()})
+            pid += 1
+
+        store._insert_with_retry(collection, rows)
+        print(f"  인덱싱: {min(start+CHUNK, n_total):,}/{n_total:,}", flush=True)
+
+    store.finalize(collection)
+    elapsed = round(time.time() - t0, 2)
+    dps     = round(n_total / elapsed, 1)
+    print(f"  인덱싱 완료: {elapsed}s  ({dps} docs/s)", flush=True)
+    return elapsed, dps
+
+
+def _search_concurrent(
+    store:       MilvusStore,
+    collection:  str,
+    vectors:     np.ndarray,
+    top_k:       int,
+    concurrency: int,
+    duration_sec: int,
+) -> dict:
+    import threading, random
+    from pymilvus import MilvusClient
+
+    latencies: list[float] = []
+    lock = threading.Lock()
+    stop_event = threading.Event()
+    n = len(vectors)
+
+    def _worker():
+        c = MilvusClient(uri=store._uri, timeout=60)
+        if store._token:
+            c = MilvusClient(uri=store._uri, token=store._token, timeout=60)
+        while not stop_event.is_set():
+            idx = random.randint(0, n - 1)
+            t0 = time.perf_counter()
+            c.search(
+                collection_name=collection,
+                data=[vectors[idx].tolist()],
+                anns_field="vector",
+                search_params={"metric_type": "COSINE", "params": {"ef": 100}},
+                limit=top_k,
+                output_fields=[],
+            )
+            lat = time.perf_counter() - t0
+            with lock:
+                latencies.append(lat)
+
+    threads = [threading.Thread(target=_worker, daemon=True) for _ in range(concurrency)]
+    for t in threads:
+        t.start()
+    time.sleep(duration_sec)
+    stop_event.set()
+    for t in threads:
+        t.join(timeout=10)
+
+    if not latencies:
+        return {"qps": 0, "p50_ms": 0, "p95_ms": 0, "p99_ms": 0, "total": 0}
+
+    latencies.sort()
+    m = len(latencies)
+    return {
+        "qps":    round(m / duration_sec, 1),
+        "p50_ms": round(latencies[int(m * 0.50)] * 1000, 1),
+        "p95_ms": round(latencies[int(m * 0.95)] * 1000, 1),
+        "p99_ms": round(latencies[int(m * 0.99)] * 1000, 1),
+        "total":  m,
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Milvus API 기반 임베딩 벤치마크")
+    ap.add_argument("--data-root", default=os.getenv("DATA_ROOT", "/data"))
+    ap.add_argument("--vector-mode", default="dense", choices=["dense", "sparse"])
+    ap.add_argument("--search-concurrency", type=int, nargs="+", default=None, metavar="N")
+    ap.add_argument("--search-duration", type=int, default=30)
+    ap.add_argument("--out", default="results")
+    args = ap.parse_args()
+
+    os.makedirs(args.out, exist_ok=True)
+    cfg = Config.from_env()
+
+    print(f"[설정] 모델={cfg.embedding.model}  dim={cfg.embedding.dim}  mode={args.vector_mode}")
+    print(f"[설정] API={cfg.embedding.endpoint}  Milvus={cfg.milvus.uri}")
+
+    docs, queries, qrels = load_from_dir(args.data_root)
+
+    result = run_bench(
+        cfg, docs, queries, qrels,
+        vector_mode=args.vector_mode,
+        search_concurrency=args.search_concurrency,
+        search_duration=args.search_duration,
+    )
+
+    model_tag = re.sub(r"[^a-z0-9_]", "_", cfg.embedding.model.lower())
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    out_path  = os.path.join(args.out, f"{model_tag}_{args.vector_mode}_{timestamp}.json")
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2, default=_json_default)
+
+    print(f"\n결과 저장: {out_path}")
+
+
+if __name__ == "__main__":
+    main()
