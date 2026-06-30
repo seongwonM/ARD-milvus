@@ -1,18 +1,8 @@
 # 6가지 콤보 벤치마크 Job
+# Secret: milvus-migration-secret (EMBEDDING_API_ENDPOINT, EMBEDDING_API_KEY, MILVUS_TOKEN, GITHUB_TOKEN)
 #
-# 사전 조건:
-#   - Milvus 서비스가 떠 있어야 함 (k8s/milvus.yaml)
-#   - Secret "bench-secret"에 아래 키 필요:
-#       EMBEDDING_API_ENDPOINT, EMBEDDING_API_KEY
-#       EMBEDDING_MODEL_8B (Qwen/Qwen3-Embedding-8B)
-#
-# 실행:
-#   kubectl apply -f k8s/bench-jobs.yaml
-#
-# 각 Job은 독립 파드로 실행되며 결과는 stdout 로그에 출력됩니다.
-# kubectl logs job/bench-dense
-# kubectl logs job/bench-dense-colbert
-# ...
+# 실행: kubectl apply -f k8s/bench-jobs.yaml
+# 로그: kubectl logs job/bench-dense
 
 # ── 1. dense ──────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -26,32 +16,45 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: YOUR_IMAGE
-          command:
-            - python
-            - -m
-            - milvus_migration.bench.runner
-            - --vector-mode
-            - dense
-            - --data-root
-            - /data
-            - --out
-            - /results
+          image: ghcr.io/seongwonm/ard-milvus:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              python -m milvus_migration.bench.runner
+              --vector-mode dense
+              --data-root /data
+              --out /tmp/results
+              --search-concurrency 1 4 8 16 &&
+              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
+              cp /tmp/results/*.json /tmp/repo/results/ &&
+              cd /tmp/repo &&
+              git config user.email "bench-bot@pod" &&
+              git config user.name "bench-bot" &&
+              git add results/ &&
+              git commit -m "bench: dense $(date +%Y%m%d_%H%M%S)" &&
+              git push
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
             - name: EMBEDDING_MODEL
-              value: "BAAI/bge-m3"
+              value: "bge-m3"
             - name: EMBEDDING_DIM
               value: "1024"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "2048"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
           envFrom:
             - secretRef:
-                name: bench-secret
+                name: milvus-migration-secret
           resources:
             requests:
-              memory: "4Gi"
+              cpu: "250m"
+              memory: "2Gi"
             limits:
-              memory: "8Gi"
+              cpu: "2"
+              memory: "4Gi"
 ---
 # ── 2. dense + ColBERT ────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -65,33 +68,46 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: YOUR_IMAGE
-          command:
-            - python
-            - -m
-            - milvus_migration.bench.runner
-            - --vector-mode
-            - dense
-            - --colbert-rerank
-            - --data-root
-            - /data
-            - --out
-            - /results
+          image: ghcr.io/seongwonm/ard-milvus:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              python -m milvus_migration.bench.runner
+              --vector-mode dense
+              --colbert-rerank
+              --data-root /data
+              --out /tmp/results
+              --search-concurrency 1 4 8 16 &&
+              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
+              cp /tmp/results/*.json /tmp/repo/results/ &&
+              cd /tmp/repo &&
+              git config user.email "bench-bot@pod" &&
+              git config user.name "bench-bot" &&
+              git add results/ &&
+              git commit -m "bench: dense-colbert $(date +%Y%m%d_%H%M%S)" &&
+              git push
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
             - name: EMBEDDING_MODEL
-              value: "BAAI/bge-m3"
+              value: "bge-m3"
             - name: EMBEDDING_DIM
               value: "1024"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "2048"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
           envFrom:
             - secretRef:
-                name: bench-secret
+                name: milvus-migration-secret
           resources:
             requests:
-              memory: "4Gi"
+              cpu: "250m"
+              memory: "2Gi"
             limits:
-              memory: "8Gi"
+              cpu: "2"
+              memory: "4Gi"
 ---
 # ── 3. sparse ─────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -105,32 +121,44 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: YOUR_IMAGE
-          command:
-            - python
-            - -m
-            - milvus_migration.bench.runner
-            - --vector-mode
-            - sparse
-            - --data-root
-            - /data
-            - --out
-            - /results
+          image: ghcr.io/seongwonm/ard-milvus:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              python -m milvus_migration.bench.runner
+              --vector-mode sparse
+              --data-root /data
+              --out /tmp/results &&
+              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
+              cp /tmp/results/*.json /tmp/repo/results/ &&
+              cd /tmp/repo &&
+              git config user.email "bench-bot@pod" &&
+              git config user.name "bench-bot" &&
+              git add results/ &&
+              git commit -m "bench: sparse $(date +%Y%m%d_%H%M%S)" &&
+              git push
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
             - name: EMBEDDING_MODEL
-              value: "BAAI/bge-m3"
+              value: "bge-m3"
             - name: EMBEDDING_DIM
               value: "1024"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "2048"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
           envFrom:
             - secretRef:
-                name: bench-secret
+                name: milvus-migration-secret
           resources:
             requests:
-              memory: "4Gi"
+              cpu: "250m"
+              memory: "2Gi"
             limits:
-              memory: "8Gi"
+              cpu: "2"
+              memory: "4Gi"
 ---
 # ── 4. sparse + ColBERT ───────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -144,33 +172,45 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: YOUR_IMAGE
-          command:
-            - python
-            - -m
-            - milvus_migration.bench.runner
-            - --vector-mode
-            - sparse
-            - --colbert-rerank
-            - --data-root
-            - /data
-            - --out
-            - /results
+          image: ghcr.io/seongwonm/ard-milvus:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              python -m milvus_migration.bench.runner
+              --vector-mode sparse
+              --colbert-rerank
+              --data-root /data
+              --out /tmp/results &&
+              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
+              cp /tmp/results/*.json /tmp/repo/results/ &&
+              cd /tmp/repo &&
+              git config user.email "bench-bot@pod" &&
+              git config user.name "bench-bot" &&
+              git add results/ &&
+              git commit -m "bench: sparse-colbert $(date +%Y%m%d_%H%M%S)" &&
+              git push
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
             - name: EMBEDDING_MODEL
-              value: "BAAI/bge-m3"
+              value: "bge-m3"
             - name: EMBEDDING_DIM
               value: "1024"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "2048"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
           envFrom:
             - secretRef:
-                name: bench-secret
+                name: milvus-migration-secret
           resources:
             requests:
-              memory: "4Gi"
+              cpu: "250m"
+              memory: "2Gi"
             limits:
-              memory: "8Gi"
+              cpu: "2"
+              memory: "4Gi"
 ---
 # ── 5. Qwen3-8B dense ─────────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -184,17 +224,24 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: YOUR_IMAGE
-          command:
-            - python
-            - -m
-            - milvus_migration.bench.runner
-            - --vector-mode
-            - dense
-            - --data-root
-            - /data
-            - --out
-            - /results
+          image: ghcr.io/seongwonm/ard-milvus:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              python -m milvus_migration.bench.runner
+              --vector-mode dense
+              --data-root /data
+              --out /tmp/results
+              --search-concurrency 1 4 8 16 &&
+              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
+              cp /tmp/results/*.json /tmp/repo/results/ &&
+              cd /tmp/repo &&
+              git config user.email "bench-bot@pod" &&
+              git config user.name "bench-bot" &&
+              git add results/ &&
+              git commit -m "bench: qwen3-8b $(date +%Y%m%d_%H%M%S)" &&
+              git push
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
@@ -202,13 +249,19 @@ spec:
               value: "Qwen/Qwen3-Embedding-8B"
             - name: EMBEDDING_DIM
               value: "4096"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "512"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
           envFrom:
             - secretRef:
-                name: bench-secret
+                name: milvus-migration-secret
           resources:
             requests:
+              cpu: "250m"
               memory: "4Gi"
             limits:
+              cpu: "2"
               memory: "8Gi"
 ---
 # ── 6. Qwen3-8B dense + ColBERT ───────────────────────────────────────────────
@@ -223,18 +276,25 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: YOUR_IMAGE
-          command:
-            - python
-            - -m
-            - milvus_migration.bench.runner
-            - --vector-mode
-            - dense
-            - --colbert-rerank
-            - --data-root
-            - /data
-            - --out
-            - /results
+          image: ghcr.io/seongwonm/ard-milvus:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              python -m milvus_migration.bench.runner
+              --vector-mode dense
+              --colbert-rerank
+              --data-root /data
+              --out /tmp/results
+              --search-concurrency 1 4 8 16 &&
+              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
+              cp /tmp/results/*.json /tmp/repo/results/ &&
+              cd /tmp/repo &&
+              git config user.email "bench-bot@pod" &&
+              git config user.name "bench-bot" &&
+              git add results/ &&
+              git commit -m "bench: qwen3-8b-colbert $(date +%Y%m%d_%H%M%S)" &&
+              git push
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
@@ -242,11 +302,17 @@ spec:
               value: "Qwen/Qwen3-Embedding-8B"
             - name: EMBEDDING_DIM
               value: "4096"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "512"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
           envFrom:
             - secretRef:
-                name: bench-secret
+                name: milvus-migration-secret
           resources:
             requests:
+              cpu: "250m"
               memory: "4Gi"
             limits:
+              cpu: "2"
               memory: "8Gi"
