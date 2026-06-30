@@ -14,7 +14,14 @@ import time
 import numpy as np
 
 _INSERT_BATCH = 64
-_TEXT_MAX_LEN = 2048
+_TEXT_MAX_BYTES = 2000  # VARCHAR max_length은 바이트 기준 — 여유분 확보
+
+
+def _trunc(text: str) -> str:
+    b = text.encode("utf-8")
+    if len(b) <= _TEXT_MAX_BYTES:
+        return text
+    return b[:_TEXT_MAX_BYTES].decode("utf-8", errors="ignore")
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +54,7 @@ class MilvusStore:
         schema = MilvusClient.create_schema(auto_id=False, enable_dynamic_field=False)
         schema.add_field("id",     DataType.INT64,   is_primary=True)
         schema.add_field("doc_id", DataType.VARCHAR, max_length=512)
-        schema.add_field("text",   DataType.VARCHAR, max_length=_TEXT_MAX_LEN)
+        schema.add_field("text",   DataType.VARCHAR, max_length=_TEXT_MAX_BYTES)
 
         index_params = MilvusClient.prepare_index_params()
 
@@ -94,14 +101,14 @@ class MilvusStore:
                 row = {
                     "id": pid,
                     "doc_id": doc_id,
-                    "text": text[:_TEXT_MAX_LEN],
+                    "text": _trunc(text),
                     "vector": {int(k): float(v) for k, v in vec.items()},
                 }
             else:
                 row = {
                     "id": pid,
                     "doc_id": doc_id,
-                    "text": text[:_TEXT_MAX_LEN],
+                    "text": _trunc(text),
                     "vector": vec.tolist(),
                 }
             batch.append(row)

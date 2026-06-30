@@ -27,6 +27,13 @@ from milvus_migration.embedding import EmbeddingClient, SparseUnsupported, ColBE
 from milvus_migration.milvus_store import MilvusStore
 
 
+def _trunc_bytes(text: str, max_bytes: int = 2000) -> str:
+    b = text.encode("utf-8")
+    if len(b) <= max_bytes:
+        return text
+    return b[:max_bytes].decode("utf-8", errors="ignore")
+
+
 def _safe_name(model_id: str) -> str:
     return re.sub(r"[^a-z0-9_]", "_", model_id.lower())[:200]
 
@@ -223,7 +230,7 @@ def _build_index(
             for doc_id, text, vec in zip(chunk_ids, texts, embs):
                 pending.append({
                     "id": pid, "doc_id": doc_id,
-                    "text": text[:2048],
+                    "text": _trunc_bytes(text),
                     "vector": {int(k): float(v) for k, v in vec.items()},
                 })
                 pid += 1
@@ -232,7 +239,7 @@ def _build_index(
             for doc_id, text, vec in zip(chunk_ids, texts, embs):
                 pending.append({
                     "id": pid, "doc_id": doc_id,
-                    "text": text[:2048],
+                    "text": _trunc_bytes(text),
                     "vector": vec.tolist(),
                 })
                 pid += 1
