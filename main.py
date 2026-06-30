@@ -38,7 +38,7 @@ def cmd_index(args: argparse.Namespace) -> None:
         docs,
         vector_mode=args.vector_mode,
         recreate=args.recreate,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size or None,
     )
 
 
@@ -46,7 +46,9 @@ def cmd_search(args: argparse.Namespace) -> None:
     from .pipeline import Pipeline
 
     pipe = Pipeline.from_env()
-    results = pipe.search(args.query, top_k=args.top_k, vector_mode=args.vector_mode)
+    results = pipe.search(
+        args.query, top_k=args.top_k, vector_mode=args.vector_mode,
+    )
 
     print(f"\n[검색 결과] '{args.query}' (top-{args.top_k})")
     print("-" * 60)

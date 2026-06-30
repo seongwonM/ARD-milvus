@@ -23,7 +23,7 @@ import numpy as np
 from milvus_migration.bench.data_loader import load_from_dir
 from milvus_migration.bench.evaluator import evaluate
 from milvus_migration.config import Config
-from milvus_migration.embedding import EmbeddingClient
+from milvus_migration.embedding import EmbeddingClient, SparseUnsupported, ColBERTUnsupported
 from milvus_migration.milvus_store import MilvusStore
 
 
@@ -45,6 +45,8 @@ def run_bench(
     queries:          dict,
     qrels:            dict,
     vector_mode:      str = "dense",
+    with_colbert_rerank: bool = False,
+    colbert_top_n:    int = 100,
     search_concurrency: list[int] | None = None,
     search_duration:    int = 30,
 ) -> dict:
@@ -56,7 +58,7 @@ def run_bench(
     collection = _safe_name(model_id) + (f"_{vector_mode}" if vector_mode != "dense" else "")
 
     print(f"\n{'='*64}")
-    print(f"  모델: {model_id}  dim={dim}  mode={vector_mode}")
+    print(f"  모델: {model_id}  dim={dim}  mode={vector_mode}  colbert={with_colbert_rerank}")
     print(f"  컬렉션: {collection}  Milvus: {cfg.milvus.uri}")
     print(f"{'='*64}")
 
@@ -85,18 +87,57 @@ def run_bench(
 
     print(f"  query 인코딩 ({len(q_ids):,}건)...", flush=True)
     t0 = time.time()
-    q_embs = client.encode(q_texts, batch_size=batch_size)
+    if vector_mode == "sparse":
+        q_embs = client.encode_sparse(q_texts, batch_size=batch_size)
+    else:
+        q_embs = client.encode(q_texts, batch_size=batch_size)
     query_encode_sec = round(time.time() - t0, 2)
     query_encode_qps = round(len(q_ids) / query_encode_sec, 1)
     print(f"  query 인코딩: {query_encode_sec}s  ({query_encode_qps} q/s)", flush=True)
 
-    # ── 검색 ─────────────────────────────────────────────────────────────────
-    print(f"  검색 (top-100)...", flush=True)
+    # ── 검색 (+ ColBERT 리랭킹) ──────────────────────────────────────────────
+    fetch_n = max(100, colbert_top_n) if with_colbert_rerank else 100
+    print(f"  검색 (top-{fetch_n})...", flush=True)
     t0 = time.time()
-    raw_results = store.search(collection, q_embs, top_k=100, vector_mode=vector_mode)
-    search_sec = round(time.time() - t0, 2)
-    search_qps = round(len(q_ids) / search_sec, 1)
-    print(f"  검색: {search_sec}s  ({search_qps} q/s)", flush=True)
+
+    if with_colbert_rerank:
+        candidates_per_q = store.search_with_text(collection, q_embs, top_k=fetch_n, vector_mode=vector_mode)
+        search_sec = round(time.time() - t0, 2)
+        search_qps = round(len(q_ids) / search_sec, 1)
+        print(f"  검색: {search_sec}s  ({search_qps} q/s)", flush=True)
+
+        print(f"  ColBERT 리랭킹...", flush=True)
+        t_cb = time.time()
+        try:
+            cand_texts = [text for cands in candidates_per_q for _, _, text in cands]
+            all_tok_vecs = client.encode_colbert(q_texts + cand_texts, batch_size=batch_size)
+            q_tok_vecs = all_tok_vecs[:len(q_texts)]
+            d_tok_vecs = all_tok_vecs[len(q_texts):]
+
+            raw_results = []
+            offset = 0
+            for i, cands in enumerate(candidates_per_q):
+                n = len(cands)
+                reranked = MilvusStore.colbert_rerank(
+                    cands, q_tok_vecs[i], d_tok_vecs[offset: offset + n], top_k=100
+                )
+                raw_results.append(reranked)
+                offset += n
+            colbert_sec = round(time.time() - t_cb, 2)
+            print(f"  ColBERT 리랭킹: {colbert_sec}s", flush=True)
+        except ColBERTUnsupported as exc:
+            colbert_sec = None
+            print(f"  ColBERT 미지원 → ANN 결과 그대로 사용: {exc}", flush=True)
+            raw_results = [
+                [(doc_id, score) for doc_id, score, _ in cands]
+                for cands in candidates_per_q
+            ]
+    else:
+        colbert_sec = None
+        raw_results = store.search(collection, q_embs, top_k=100, vector_mode=vector_mode)
+        search_sec = round(time.time() - t0, 2)
+        search_qps = round(len(q_ids) / search_sec, 1)
+        print(f"  검색: {search_sec}s  ({search_qps} q/s)", flush=True)
 
     run = {q_ids[i]: {doc_id: score for doc_id, score in hits}
            for i, hits in enumerate(raw_results)}
@@ -143,6 +184,8 @@ def run_bench(
         "query_encode_qps":    query_encode_qps,
         "search_sec":          search_sec,
         "search_qps":          search_qps,
+        "colbert_rerank":      with_colbert_rerank,
+        "colbert_sec":         colbert_sec,
         "concurrent":          concurrent_results,
         **metrics,
     }
@@ -169,16 +212,30 @@ def _build_index(
     pending: list[dict] = []
 
     for start in range(0, n_total, batch_size):
-        chunk_ids = doc_ids[start : start + batch_size]
+        chunk_ids = doc_ids[start: start + batch_size]
         texts = [
             f"{docs[d].get('title', '')} {docs[d]['chunk']}".strip()
             for d in chunk_ids
         ]
-        embs = client.encode(texts, batch_size=batch_size)
 
-        for doc_id, vec in zip(chunk_ids, embs):
-            pending.append({"id": pid, "doc_id": doc_id, "vector": vec.tolist()})
-            pid += 1
+        if vector_mode == "sparse":
+            embs = client.encode_sparse(texts, batch_size=batch_size)
+            for doc_id, text, vec in zip(chunk_ids, texts, embs):
+                pending.append({
+                    "id": pid, "doc_id": doc_id,
+                    "text": text[:2048],
+                    "vector": {int(k): float(v) for k, v in vec.items()},
+                })
+                pid += 1
+        else:
+            embs = client.encode(texts, batch_size=batch_size)
+            for doc_id, text, vec in zip(chunk_ids, texts, embs):
+                pending.append({
+                    "id": pid, "doc_id": doc_id,
+                    "text": text[:2048],
+                    "vector": vec.tolist(),
+                })
+                pid += 1
 
         if len(pending) >= MILVUS_INSERT_BATCH:
             store._insert_with_retry(collection, pending)

@@ -11,6 +11,17 @@ data:
     auto-compaction-retention: "1000"
 ---
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: milvus-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
 kind: Pod
 metadata:
   name: milvus
@@ -40,17 +51,22 @@ spec:
         - name: milvus-config
           mountPath: /milvus/configs/embedEtcd.yaml
           subPath: embedEtcd.yaml
+        - name: milvus-data
+          mountPath: /var/lib/milvus
       resources:
         requests:
-          cpu: "250m"
-          memory: "512Mi"
-        limits:
           cpu: "1"
-          memory: "2Gi"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
   volumes:
     - name: milvus-config
       configMap:
         name: milvus-config
+    - name: milvus-data
+      persistentVolumeClaim:
+        claimName: milvus-data
 ---
 apiVersion: v1
 kind: Service
