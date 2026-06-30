@@ -1,0 +1,252 @@
+# 6가지 콤보 벤치마크 Job
+#
+# 사전 조건:
+#   - Milvus 서비스가 떠 있어야 함 (k8s/milvus.yaml)
+#   - Secret "bench-secret"에 아래 키 필요:
+#       EMBEDDING_API_ENDPOINT, EMBEDDING_API_KEY
+#       EMBEDDING_MODEL_8B (Qwen/Qwen3-Embedding-8B)
+#
+# 실행:
+#   kubectl apply -f k8s/bench-jobs.yaml
+#
+# 각 Job은 독립 파드로 실행되며 결과는 stdout 로그에 출력됩니다.
+# kubectl logs job/bench-dense
+# kubectl logs job/bench-dense-colbert
+# ...
+
+# ── 1. dense ──────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-dense
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: YOUR_IMAGE
+          command:
+            - python
+            - -m
+            - milvus_migration.bench.runner
+            - --vector-mode
+            - dense
+            - --data-root
+            - /data
+            - --out
+            - /results
+          env:
+            - name: MILVUS_URI
+              value: "http://milvus:19530"
+            - name: EMBEDDING_MODEL
+              value: "BAAI/bge-m3"
+            - name: EMBEDDING_DIM
+              value: "1024"
+          envFrom:
+            - secretRef:
+                name: bench-secret
+          resources:
+            requests:
+              memory: "4Gi"
+            limits:
+              memory: "8Gi"
+---
+# ── 2. dense + ColBERT ────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-dense-colbert
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: YOUR_IMAGE
+          command:
+            - python
+            - -m
+            - milvus_migration.bench.runner
+            - --vector-mode
+            - dense
+            - --colbert-rerank
+            - --data-root
+            - /data
+            - --out
+            - /results
+          env:
+            - name: MILVUS_URI
+              value: "http://milvus:19530"
+            - name: EMBEDDING_MODEL
+              value: "BAAI/bge-m3"
+            - name: EMBEDDING_DIM
+              value: "1024"
+          envFrom:
+            - secretRef:
+                name: bench-secret
+          resources:
+            requests:
+              memory: "4Gi"
+            limits:
+              memory: "8Gi"
+---
+# ── 3. sparse ─────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-sparse
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: YOUR_IMAGE
+          command:
+            - python
+            - -m
+            - milvus_migration.bench.runner
+            - --vector-mode
+            - sparse
+            - --data-root
+            - /data
+            - --out
+            - /results
+          env:
+            - name: MILVUS_URI
+              value: "http://milvus:19530"
+            - name: EMBEDDING_MODEL
+              value: "BAAI/bge-m3"
+            - name: EMBEDDING_DIM
+              value: "1024"
+          envFrom:
+            - secretRef:
+                name: bench-secret
+          resources:
+            requests:
+              memory: "4Gi"
+            limits:
+              memory: "8Gi"
+---
+# ── 4. sparse + ColBERT ───────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-sparse-colbert
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: YOUR_IMAGE
+          command:
+            - python
+            - -m
+            - milvus_migration.bench.runner
+            - --vector-mode
+            - sparse
+            - --colbert-rerank
+            - --data-root
+            - /data
+            - --out
+            - /results
+          env:
+            - name: MILVUS_URI
+              value: "http://milvus:19530"
+            - name: EMBEDDING_MODEL
+              value: "BAAI/bge-m3"
+            - name: EMBEDDING_DIM
+              value: "1024"
+          envFrom:
+            - secretRef:
+                name: bench-secret
+          resources:
+            requests:
+              memory: "4Gi"
+            limits:
+              memory: "8Gi"
+---
+# ── 5. Qwen3-8B dense ─────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-qwen3-8b
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: YOUR_IMAGE
+          command:
+            - python
+            - -m
+            - milvus_migration.bench.runner
+            - --vector-mode
+            - dense
+            - --data-root
+            - /data
+            - --out
+            - /results
+          env:
+            - name: MILVUS_URI
+              value: "http://milvus:19530"
+            - name: EMBEDDING_MODEL
+              value: "Qwen/Qwen3-Embedding-8B"
+            - name: EMBEDDING_DIM
+              value: "4096"
+          envFrom:
+            - secretRef:
+                name: bench-secret
+          resources:
+            requests:
+              memory: "4Gi"
+            limits:
+              memory: "8Gi"
+---
+# ── 6. Qwen3-8B dense + ColBERT ───────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-qwen3-8b-colbert
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: YOUR_IMAGE
+          command:
+            - python
+            - -m
+            - milvus_migration.bench.runner
+            - --vector-mode
+            - dense
+            - --colbert-rerank
+            - --data-root
+            - /data
+            - --out
+            - /results
+          env:
+            - name: MILVUS_URI
+              value: "http://milvus:19530"
+            - name: EMBEDDING_MODEL
+              value: "Qwen/Qwen3-Embedding-8B"
+            - name: EMBEDDING_DIM
+              value: "4096"
+          envFrom:
+            - secretRef:
+                name: bench-secret
+          resources:
+            requests:
+              memory: "4Gi"
+            limits:
+              memory: "8Gi"

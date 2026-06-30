@@ -314,11 +314,13 @@ def _search_concurrent(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Milvus API 기반 임베딩 벤치마크")
-    ap.add_argument("--data-root", default=os.getenv("DATA_ROOT", "/data"))
-    ap.add_argument("--vector-mode", default="dense", choices=["dense", "sparse"])
+    ap.add_argument("--data-root",          default=os.getenv("DATA_ROOT", "/data"))
+    ap.add_argument("--vector-mode",        default="dense", choices=["dense", "sparse"])
+    ap.add_argument("--colbert-rerank",     action="store_true", help="dense/sparse 100개 후보 → ColBERT 리랭킹")
+    ap.add_argument("--colbert-top-n",      type=int, default=100)
     ap.add_argument("--search-concurrency", type=int, nargs="+", default=None, metavar="N")
-    ap.add_argument("--search-duration", type=int, default=30)
-    ap.add_argument("--out", default="results")
+    ap.add_argument("--search-duration",    type=int, default=30)
+    ap.add_argument("--out",                default="results")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -335,6 +337,7 @@ def main() -> None:
     print(f"  timeout:       {cfg.embedding.timeout}s")
     print(f"  Milvus URI:    {cfg.milvus.uri}")
     print(f"  data_root:     {args.data_root}")
+    print(f"  colbert:       {args.colbert_rerank}")
     print(f"  concurrency:   {args.search_concurrency}")
     print(f"{'='*64}\n")
 
@@ -343,13 +346,16 @@ def main() -> None:
     result = run_bench(
         cfg, docs, queries, qrels,
         vector_mode=args.vector_mode,
+        with_colbert_rerank=args.colbert_rerank,
+        colbert_top_n=args.colbert_top_n,
         search_concurrency=args.search_concurrency,
         search_duration=args.search_duration,
     )
 
+    colbert_tag = "_colbert" if args.colbert_rerank else ""
     model_tag = re.sub(r"[^a-z0-9_]", "_", cfg.embedding.model.lower())
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    out_path  = os.path.join(args.out, f"{model_tag}_{args.vector_mode}_{timestamp}.json")
+    out_path  = os.path.join(args.out, f"{model_tag}_{args.vector_mode}{colbert_tag}_{timestamp}.json")
 
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2, default=_json_default)
