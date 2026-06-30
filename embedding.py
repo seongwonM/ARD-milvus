@@ -91,9 +91,11 @@ class EmbeddingClient:
         if resp.status_code in (400, 404, 422):
             raise SparseUnsupported(f"HTTP {resp.status_code}: {resp.text[:200]}")
         resp.raise_for_status()
+        body = resp.json()
         try:
-            return self._parse_sparse_response(resp.json())
+            return self._parse_sparse_response(body)
         except (KeyError, TypeError, ValueError) as exc:
+            logger.error(f"sparse 응답 형식 불일치 — 실제 응답: {str(body)[:500]}")
             raise SparseUnsupported(f"응답 형식 불일치: {exc}") from exc
 
     def encode_sparse(
