@@ -45,6 +45,8 @@ spec:
           value: minioadmin
         - name: MINIO_SECRET_ACCESS_KEY
           value: minioadmin
+        - name: MILVUS_LOG_LEVEL
+          value: "warn"
       ports:
         - containerPort: 19530
       volumeMounts:
