@@ -1,7 +1,7 @@
 # 6가지 콤보 벤치마크 Job
-# Secret: milvus-migration-secret (EMBEDDING_API_ENDPOINT, EMBEDDING_API_KEY, MILVUS_TOKEN, GITHUB_TOKEN)
-#
+# Secret: milvus-migration-secret
 # 실행: kubectl apply -f k8s/bench-jobs.yaml
+# 삭제: kubectl delete job bench-dense bench-dense-colbert bench-sparse bench-sparse-colbert bench-qwen3-8b bench-qwen3-8b-colbert
 # 로그: kubectl logs job/bench-dense
 
 # ── 1. dense ──────────────────────────────────────────────────────────────────
@@ -16,16 +16,16 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:latest
+          image: ghcr.io/seongwonm/ard-milvus:722c31df52015a4fbc4e71cc6c8e053801d16f03
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
-            - >-
-              python -m milvus_migration.bench.runner
-              --vector-mode dense
-              --data-root /data
-              --out /tmp/results
-              --search-concurrency 1 4 8 16 &&
+            - |
+              python -m milvus_migration.bench.runner \
+                --vector-mode dense \
+                --data-root /data \
+                --out /tmp/results \
+                --search-concurrency 1 4 8 16 &&
               git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
               cp /tmp/results/*.json /tmp/repo/results/ &&
               cd /tmp/repo &&
@@ -37,6 +37,8 @@ spec:
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: MILVUS_COLLECTION
+              value: "documents"
             - name: EMBEDDING_MODEL
               value: "bge-m3"
             - name: EMBEDDING_DIM
@@ -45,9 +47,26 @@ spec:
               value: "2048"
             - name: EMBEDDING_TIMEOUT
               value: "300"
-          envFrom:
-            - secretRef:
-                name: milvus-migration-secret
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: MILVUS_TOKEN
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: GITHUB_TOKEN
           resources:
             requests:
               cpu: "250m"
@@ -68,17 +87,17 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:latest
+          image: ghcr.io/seongwonm/ard-milvus:722c31df52015a4fbc4e71cc6c8e053801d16f03
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
-            - >-
-              python -m milvus_migration.bench.runner
-              --vector-mode dense
-              --colbert-rerank
-              --data-root /data
-              --out /tmp/results
-              --search-concurrency 1 4 8 16 &&
+            - |
+              python -m milvus_migration.bench.runner \
+                --vector-mode dense \
+                --colbert-rerank \
+                --data-root /data \
+                --out /tmp/results \
+                --search-concurrency 1 4 8 16 &&
               git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
               cp /tmp/results/*.json /tmp/repo/results/ &&
               cd /tmp/repo &&
@@ -90,6 +109,8 @@ spec:
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: MILVUS_COLLECTION
+              value: "documents"
             - name: EMBEDDING_MODEL
               value: "bge-m3"
             - name: EMBEDDING_DIM
@@ -98,9 +119,26 @@ spec:
               value: "2048"
             - name: EMBEDDING_TIMEOUT
               value: "300"
-          envFrom:
-            - secretRef:
-                name: milvus-migration-secret
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: MILVUS_TOKEN
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: GITHUB_TOKEN
           resources:
             requests:
               cpu: "250m"
@@ -121,15 +159,15 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:latest
+          image: ghcr.io/seongwonm/ard-milvus:722c31df52015a4fbc4e71cc6c8e053801d16f03
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
-            - >-
-              python -m milvus_migration.bench.runner
-              --vector-mode sparse
-              --data-root /data
-              --out /tmp/results &&
+            - |
+              python -m milvus_migration.bench.runner \
+                --vector-mode sparse \
+                --data-root /data \
+                --out /tmp/results &&
               git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
               cp /tmp/results/*.json /tmp/repo/results/ &&
               cd /tmp/repo &&
@@ -141,6 +179,8 @@ spec:
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: MILVUS_COLLECTION
+              value: "documents"
             - name: EMBEDDING_MODEL
               value: "bge-m3"
             - name: EMBEDDING_DIM
@@ -149,9 +189,26 @@ spec:
               value: "2048"
             - name: EMBEDDING_TIMEOUT
               value: "300"
-          envFrom:
-            - secretRef:
-                name: milvus-migration-secret
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: MILVUS_TOKEN
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: GITHUB_TOKEN
           resources:
             requests:
               cpu: "250m"
@@ -172,16 +229,16 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:latest
+          image: ghcr.io/seongwonm/ard-milvus:722c31df52015a4fbc4e71cc6c8e053801d16f03
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
-            - >-
-              python -m milvus_migration.bench.runner
-              --vector-mode sparse
-              --colbert-rerank
-              --data-root /data
-              --out /tmp/results &&
+            - |
+              python -m milvus_migration.bench.runner \
+                --vector-mode sparse \
+                --colbert-rerank \
+                --data-root /data \
+                --out /tmp/results &&
               git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
               cp /tmp/results/*.json /tmp/repo/results/ &&
               cd /tmp/repo &&
@@ -193,6 +250,8 @@ spec:
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: MILVUS_COLLECTION
+              value: "documents"
             - name: EMBEDDING_MODEL
               value: "bge-m3"
             - name: EMBEDDING_DIM
@@ -201,9 +260,26 @@ spec:
               value: "2048"
             - name: EMBEDDING_TIMEOUT
               value: "300"
-          envFrom:
-            - secretRef:
-                name: milvus-migration-secret
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: MILVUS_TOKEN
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: GITHUB_TOKEN
           resources:
             requests:
               cpu: "250m"
@@ -224,16 +300,16 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:latest
+          image: ghcr.io/seongwonm/ard-milvus:722c31df52015a4fbc4e71cc6c8e053801d16f03
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
-            - >-
-              python -m milvus_migration.bench.runner
-              --vector-mode dense
-              --data-root /data
-              --out /tmp/results
-              --search-concurrency 1 4 8 16 &&
+            - |
+              python -m milvus_migration.bench.runner \
+                --vector-mode dense \
+                --data-root /data \
+                --out /tmp/results \
+                --search-concurrency 1 4 8 16 &&
               git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
               cp /tmp/results/*.json /tmp/repo/results/ &&
               cd /tmp/repo &&
@@ -245,6 +321,8 @@ spec:
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: MILVUS_COLLECTION
+              value: "documents"
             - name: EMBEDDING_MODEL
               value: "Qwen/Qwen3-Embedding-8B"
             - name: EMBEDDING_DIM
@@ -253,9 +331,26 @@ spec:
               value: "512"
             - name: EMBEDDING_TIMEOUT
               value: "300"
-          envFrom:
-            - secretRef:
-                name: milvus-migration-secret
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: MILVUS_TOKEN
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: GITHUB_TOKEN
           resources:
             requests:
               cpu: "250m"
@@ -276,17 +371,17 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:latest
+          image: ghcr.io/seongwonm/ard-milvus:722c31df52015a4fbc4e71cc6c8e053801d16f03
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
-            - >-
-              python -m milvus_migration.bench.runner
-              --vector-mode dense
-              --colbert-rerank
-              --data-root /data
-              --out /tmp/results
-              --search-concurrency 1 4 8 16 &&
+            - |
+              python -m milvus_migration.bench.runner \
+                --vector-mode dense \
+                --colbert-rerank \
+                --data-root /data \
+                --out /tmp/results \
+                --search-concurrency 1 4 8 16 &&
               git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
               cp /tmp/results/*.json /tmp/repo/results/ &&
               cd /tmp/repo &&
@@ -298,6 +393,8 @@ spec:
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: MILVUS_COLLECTION
+              value: "documents"
             - name: EMBEDDING_MODEL
               value: "Qwen/Qwen3-Embedding-8B"
             - name: EMBEDDING_DIM
@@ -306,9 +403,26 @@ spec:
               value: "512"
             - name: EMBEDDING_TIMEOUT
               value: "300"
-          envFrom:
-            - secretRef:
-                name: milvus-migration-secret
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: MILVUS_TOKEN
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: GITHUB_TOKEN
           resources:
             requests:
               cpu: "250m"
