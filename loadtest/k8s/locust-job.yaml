@@ -43,7 +43,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: loadtest
-          image: ghcr.io/seongwonm/ard-milvus-loadtest:manual  # loadtest/Dockerfile로 수동 빌드/푸시 후 태그 교체
+          image: ghcr.io/seongwonm/ard-milvus-loadtest:a60798938f6e0969688f073a9183d047f6a9f024
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
