@@ -62,5 +62,7 @@ if ($Stage -eq "retrieval" -or $Stage -eq "all") {
 }
 
 if ($Stage -eq "rerank" -or $Stage -eq "all") {
-    Wait-AndFetch -JobName "bench-rerank" -RemotePath "/results/rerank" -LocalPath "$OutDir\rerank"
+    foreach ($job in @("bench-rerank-bge", "bench-rerank-qwen3")) {
+        Wait-AndFetch -JobName $job -RemotePath "/results/rerank" -LocalPath "$OutDir\rerank"
+    }
 }

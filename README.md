@@ -178,7 +178,8 @@ python -m milvus_migration.bench.rerank_runner \
 - `k8s/bench-jobs.yaml` — retrieval 3개 모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) Job + 결과 공유용 PVC(`bench-results`).
   각 Job의 `REINDEX` env 값을 `"true"`로 바꾸면(Job은 재적용 전 delete 필요) 인덱스가 있어도 강제로
   재색인해서 인덱싱 속도를 다시 측정합니다 (기본값 `"false"` — 있으면 재사용).
-- `k8s/rerank-job.yaml` — retrieval Job들이 끝난 뒤 적용하는 reranking Job
+- `k8s/rerank-job.yaml` — retrieval Job들이 끝난 뒤 적용하는 reranking Job. 같은 환경에서 속도를 재기 위해
+  리랭커별로 Job(pod)이 분리되어 있습니다 (`bench-rerank-bge`, `bench-rerank-qwen3`)
 - `k8s/pod.yaml` — 수동 디버그용 Pod (`kubectl exec`로 들어가 직접 실행). `bench-results` PVC를
   마운트한 채 계속 떠있어서, `fetch-results.ps1`이 이 pod를 PVC 읽기 통로로도 사용합니다
   (Job의 pod는 완료되면 컨테이너가 종료돼서 그 pod로는 kubectl cp/exec가 안 됨 — 데이터는

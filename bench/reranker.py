@@ -15,7 +15,7 @@ import time
 
 import requests
 
-from .config import EmbeddingConfig
+from ..config import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
 
