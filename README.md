@@ -156,6 +156,9 @@ python -m milvus_migration.bench.rerank_runner \
 
 ### k8s
 
+- `k8s/milvus.yaml` — Milvus standalone (embedded etcd) + PVC
+- `k8s/minio.yaml` — Milvus의 blob storage 백엔드. `milvus.yaml`이 `minio:9000` / `minioadmin`/`minioadmin`으로
+  참조하므로 서비스 이름·계정을 바꾸면 `milvus.yaml`도 같이 맞춰야 합니다.
 - `k8s/bench-jobs.yaml` — retrieval 3개 모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) Job + 결과 공유용 PVC(`bench-results`)
 - `k8s/rerank-job.yaml` — retrieval Job들이 끝난 뒤 적용하는 reranking Job
 - `k8s/pod.yaml` — 수동 디버그용 Pod (`kubectl exec`로 들어가 직접 실행)
@@ -182,11 +185,12 @@ milvus_migration/
 │   ├── retrieval_runner.py  # 1단계: 임베딩 모델별 top-100 검색 및 저장
 │   └── rerank_runner.py     # 2단계: 저장된 후보 기반 리랭킹 벤치마크
 ├── k8s/
+│   ├── milvus.yaml        # Milvus standalone
+│   ├── minio.yaml         # MinIO (Milvus blob storage 백엔드)
 │   ├── bench-jobs.yaml    # retrieval Job × 3 + PVC(ReadWriteMany)
 │   ├── rerank-job.yaml    # reranking Job
 │   ├── pod.yaml           # 디버그용 Pod
-│   ├── fetch-results.ps1  # 결과 로컬 자동 복사 스크립트
-│   └── milvus.yaml        # Milvus standalone
+│   └── fetch-results.ps1  # 결과 로컬 자동 복사 스크립트
 ├── requirements.txt
 └── .env.example
 ```
