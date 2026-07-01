@@ -16,7 +16,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
+          image: ghcr.io/seongwonm/ard-milvus:3396fe9af96eb886a2c9d4e9c56789191e23413b
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
@@ -87,7 +87,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
+          image: ghcr.io/seongwonm/ard-milvus:3396fe9af96eb886a2c9d4e9c56789191e23413b
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
@@ -159,7 +159,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
+          image: ghcr.io/seongwonm/ard-milvus:3396fe9af96eb886a2c9d4e9c56789191e23413b
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
@@ -229,7 +229,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
+          image: ghcr.io/seongwonm/ard-milvus:3396fe9af96eb886a2c9d4e9c56789191e23413b
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
@@ -300,7 +300,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
+          image: ghcr.io/seongwonm/ard-milvus:3396fe9af96eb886a2c9d4e9c56789191e23413b
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
@@ -371,7 +371,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
+          image: ghcr.io/seongwonm/ard-milvus:3396fe9af96eb886a2c9d4e9c56789191e23413b
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
