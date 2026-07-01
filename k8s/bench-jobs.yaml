@@ -9,6 +9,8 @@
 #
 # retrieval 결과는 PVC(bench-results)에 남아있는 한 재사용됩니다 — 이미 저장된 모델은
 # retrieval_runner.py가 자동으로 재검색을 스킵합니다.
+# 인덱싱 속도를 다시 재고 싶으면 해당 Job의 REINDEX 값을 "true"로 바꾼 뒤
+# (Job은 재적용 전 delete 필요) kubectl apply 하세요.
 
 # ── 결과 공유용 PVC (retrieval 3개 Job이 동시에 마운트 → ReadWriteMany 필수) ─────────
 # ReadWriteOnce(Azure Disk 등)로 하면 동시 실행되는 Job들이 볼륨 attach를 기다리며 멈춥니다.
@@ -43,12 +45,14 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              python -m milvus_migration.bench.retrieval_runner \
-                --data-root /data \
-                --out /results/retrieval
+              ARGS="--data-root /data --out /results/retrieval"
+              if [ "$REINDEX" = "true" ]; then ARGS="$ARGS --reindex"; fi
+              python -m milvus_migration.bench.retrieval_runner $ARGS
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: REINDEX
+              value: "false"   # true로 바꾸면 인덱스가 있어도 강제 재색인 (인덱싱 속도 재측정용)
             - name: EMBEDDING_MODEL
               value: "HCP-LLM-Latest"
             - name: EMBEDDING_BATCH_SIZE
@@ -102,12 +106,14 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              python -m milvus_migration.bench.retrieval_runner \
-                --data-root /data \
-                --out /results/retrieval
+              ARGS="--data-root /data --out /results/retrieval"
+              if [ "$REINDEX" = "true" ]; then ARGS="$ARGS --reindex"; fi
+              python -m milvus_migration.bench.retrieval_runner $ARGS
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: REINDEX
+              value: "false"   # true로 바꾸면 인덱스가 있어도 강제 재색인 (인덱싱 속도 재측정용)
             - name: EMBEDDING_MODEL
               value: "bge-m3"
             - name: EMBEDDING_BATCH_SIZE
@@ -161,12 +167,14 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              python -m milvus_migration.bench.retrieval_runner \
-                --data-root /data \
-                --out /results/retrieval
+              ARGS="--data-root /data --out /results/retrieval"
+              if [ "$REINDEX" = "true" ]; then ARGS="$ARGS --reindex"; fi
+              python -m milvus_migration.bench.retrieval_runner $ARGS
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
+            - name: REINDEX
+              value: "false"   # true로 바꾸면 인덱스가 있어도 강제 재색인 (인덱싱 속도 재측정용)
             - name: EMBEDDING_MODEL
               value: "Qwen3-Embedding-8B"
             - name: EMBEDDING_BATCH_SIZE
