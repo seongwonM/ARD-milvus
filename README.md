@@ -140,19 +140,27 @@ python -m milvus_migration.bench.retrieval_runner --data-root /data --out result
 
 ### 2단계 — Reranking
 
-1단계에서 저장된 top-100 후보에서 top_n(5/10/20/50/100)개만 잘라 리랭커 API에 넣고
+1단계에서 저장된 top-100 후보에서 top_n(5/10/20/50/100)개만 잘라 리랭커에 넣고
 소요 시간과 성능 지표(NDCG/MRR/Recall/MAP — `evaluator.py`)를 함께 측정합니다.
+
+리랭커는 두 가지 방식을 지원합니다:
+
+| 옵션 | 방식 | 예시 모델 |
+|---|---|---|
+| `--rerank-model` | 전용 rerank API (`{model, query, documents, top_n}` → `{results: [{index, relevance_score}]}`) | `bge-reranker-v2-m3` |
+| `--embedding-rerank-model` | retrieval 때 쓰던 임베딩 API를 그대로 재사용해 query/후보를 재인코딩 후 cosine 유사도로 재정렬 | `Qwen3-Embedding-8B` |
 
 ```bash
 python -m milvus_migration.bench.rerank_runner \
     --retrieval-result results/retrieval/bge_m3_top100.json \
-    --rerank-model qwen3-reranker \
+    --rerank-model bge-reranker-v2-m3 \
+    --embedding-rerank-model Qwen3-Embedding-8B \
     --data-root /data \
     --out results/rerank
 ```
 
-- `--retrieval-result`, `--rerank-model`, `--top-n`은 여러 개를 넘기면 모든 조합을 순회합니다.
-- Rerank API는 Embedding API와 동일한 endpoint/헤더를 사용합니다 (`RerankClient`, `bench/reranker.py`).
+- `--retrieval-result`, `--rerank-model`, `--embedding-rerank-model`, `--top-n`은 여러 개를 넘기면 모든 조합을 순회합니다.
+- 두 방식 모두 endpoint/헤더는 Embedding API와 동일합니다 (`RerankClient`/`EmbeddingClient`, `bench/reranker.py`).
 
 ### k8s
 

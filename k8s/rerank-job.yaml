@@ -1,5 +1,9 @@
 # Reranking Job — retrieval Job 3개(k8s/bench-jobs.yaml)가 모두 완료된 뒤 적용하세요.
-# 3개 retrieval 결과 × 2개 리랭커(qwen3-reranker, bge-reranker-v2-m3) × top_n 5/10/20/50/100 조합을 순차 실행합니다.
+# 3개 retrieval 결과 × 2개 리랭커 × top_n 5/10/20/50/100 조합을 순차 실행합니다.
+# 리랭커 2개는 방식이 다릅니다:
+#   - bge-reranker-v2-m3: 전용 rerank API (--rerank-model)
+#   - Qwen3-Embedding-8B: retrieval 때 쓰던 임베딩 API 재사용, cosine 재정렬
+#     (--embedding-rerank-model — "qwen3 reranker"는 별도 API가 아니라 이 방식)
 #
 # 실행:
 #   kubectl wait --for=condition=complete \
@@ -30,11 +34,14 @@ spec:
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
                   /results/retrieval/qwen3_embedding_8b_top100.json \
-                --rerank-model qwen3-reranker bge-reranker-v2-m3 \
+                --rerank-model bge-reranker-v2-m3 \
+                --embedding-rerank-model Qwen3-Embedding-8B \
                 --top-n 5 10 20 50 100 \
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: EMBEDDING_BATCH_SIZE
+              value: "512"
             - name: EMBEDDING_TIMEOUT
               value: "120"
             - name: EMBEDDING_API_ENDPOINT
