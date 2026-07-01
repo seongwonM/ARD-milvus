@@ -15,6 +15,7 @@ import numpy as np
 
 _INSERT_BATCH = 64
 _TEXT_MAX_BYTES = 2000  # VARCHAR max_length은 바이트 기준 — 여유분 확보
+_SEARCH_CHUNK = 128  # 256 쿼리 × 100 결과 ≈ gRPC 메시지 크기 초과 방지
 
 
 def _trunc(text: str) -> str:
@@ -123,12 +124,10 @@ class MilvusStore:
 
     def search(self, name: str, vectors, top_k: int = 10) -> list[list[tuple[str, float]]]:
         """ANN 검색. 반환: [[("doc_id", score), ...], ...]"""
-        # 256 쿼리 × 100 결과 ≈ gRPC 메시지 크기 초과 방지
-        CHUNK = 128
         all_results: list[list[tuple[str, float]]] = []
 
-        for start in range(0, len(vectors), CHUNK):
-            end = min(start + CHUNK, len(vectors))
+        for start in range(0, len(vectors), _SEARCH_CHUNK):
+            end = min(start + _SEARCH_CHUNK, len(vectors))
             query_data = [vectors[i].tolist() for i in range(start, end)]
             results = self._client.search(
                 collection_name=name,

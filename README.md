@@ -135,8 +135,16 @@ python -m milvus_migration.bench.retrieval_runner --data-root /data --out result
 
 - 모델 선택은 `EMBEDDING_MODEL` 환경변수로 합니다 (모델마다 스크립트를 따로 실행).
 - 결과 파일이 이미 있으면 재검색하지 않고 스킵합니다 (`--force`로 강제 재실행).
+- Milvus에 인덱스가 이미 있으면 기본적으로 재사용/스킵합니다 — 인덱싱 속도를 다시 재려면 `--reindex`로
+  기존 컬렉션을 삭제하고 강제로 재색인합니다 (`--force`도 자동으로 적용됨).
 - raw dense 검색(리랭킹 전) 자체의 NDCG/MRR/Recall/MAP과 query_encode_qps/search_qps도 같이 계산해 저장합니다.
-- 결과 형식: `{"model": ..., "ndcg_at_10": ..., "search_qps": ..., "results": {"query_id": ["doc_id", ...100개], ...}}`
+- API가 배치 단위로 호출되기 때문에 항목 하나하나의 시간은 잴 수 없어, 실제로 측정 가능한 가장 작은
+  단위인 "배치 1회 호출" 단위로 아래 4가지를 각각 기록합니다 (해당 배치에 포함된 id 목록도 같이 저장):
+  - `chunk_timings` — 청크 임베딩(인덱싱), `sec_per_chunk`
+  - `insert_timings` — Milvus insert(차원별 동적 배치 크기), `sec_per_row`
+  - `query_timings` — 쿼리 임베딩, `sec_per_query`
+  - `search_timings` — Milvus 검색(128개 쿼리씩 청크), `sec_per_query`
+- 결과 형식: `{"model": ..., "ndcg_at_10": ..., "search_qps": ..., "chunk_timings": [{"batch_index": 0, "n_chunks": 512, "sec_per_chunk": ..., "chunk_ids": [...]}, ...], "query_timings": [...], "results": {"query_id": ["doc_id", ...100개], ...}}`
 
 ### 2단계 — Reranking
 
