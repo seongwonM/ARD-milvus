@@ -179,9 +179,12 @@ python -m milvus_migration.bench.rerank_runner \
   각 Job의 `REINDEX` env 값을 `"true"`로 바꾸면(Job은 재적용 전 delete 필요) 인덱스가 있어도 강제로
   재색인해서 인덱싱 속도를 다시 측정합니다 (기본값 `"false"` — 있으면 재사용).
 - `k8s/rerank-job.yaml` — retrieval Job들이 끝난 뒤 적용하는 reranking Job
-- `k8s/pod.yaml` — 수동 디버그용 Pod (`kubectl exec`로 들어가 직접 실행)
-- `k8s/fetch-results.ps1` — Job 완료를 기다렸다가 결과 JSON/로그를 로컬 `results/`로 자동 복사
-  (`./k8s/fetch-results.ps1 -Stage retrieval`, `-Stage rerank`, `-Stage all`)
+- `k8s/pod.yaml` — 수동 디버그용 Pod (`kubectl exec`로 들어가 직접 실행). `bench-results` PVC를
+  마운트한 채 계속 떠있어서, `fetch-results.ps1`이 이 pod를 PVC 읽기 통로로도 사용합니다
+  (Job의 pod는 완료되면 컨테이너가 종료돼서 그 pod로는 kubectl cp/exec가 안 됨 — 데이터는
+  PVC에 그대로 남아있지만 읽어올 살아있는 pod가 따로 필요함).
+- `k8s/fetch-results.ps1` — 위 디버그 pod을 자동으로 띄우고, Job 완료를 기다렸다가 결과 JSON/로그를
+  로컬 `results/`로 자동 복사 (`./k8s/fetch-results.ps1 -Stage retrieval`, `-Stage rerank`, `-Stage all`)
 
 > retrieval 결과 PVC(`bench-results`)는 3개 Job이 동시에 마운트하므로 `ReadWriteMany`(nfs.csi.k8s.io
 > 기반 StorageClass)로 만들어져 있습니다. `ReadWriteOnce`로 바꾸면 동시 실행 시 volume attach 대기로 멈춥니다.
