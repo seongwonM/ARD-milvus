@@ -36,7 +36,6 @@ def cmd_index(args: argparse.Namespace) -> None:
     pipe = Pipeline.from_env()
     pipe.index(
         docs,
-        vector_mode=args.vector_mode,
         recreate=args.recreate,
         batch_size=args.batch_size or None,
     )
@@ -46,9 +45,7 @@ def cmd_search(args: argparse.Namespace) -> None:
     from .pipeline import Pipeline
 
     pipe = Pipeline.from_env()
-    results = pipe.search(
-        args.query, top_k=args.top_k, vector_mode=args.vector_mode,
-    )
+    results = pipe.search(args.query, top_k=args.top_k)
 
     print(f"\n[검색 결과] '{args.query}' (top-{args.top_k})")
     print("-" * 60)
@@ -71,7 +68,6 @@ def main() -> None:
     # index
     p_index = sub.add_parser("index", help="문서를 임베딩 후 Milvus에 인덱싱")
     p_index.add_argument("--file",         required=True,      help="JSON 문서 파일 경로")
-    p_index.add_argument("--vector-mode",  default="dense",    choices=["dense", "sparse"])
     p_index.add_argument("--recreate",     action="store_true", help="기존 컬렉션 삭제 후 재생성")
     p_index.add_argument("--batch-size",   type=int, default=None, help="임베딩 배치 크기")
 
@@ -79,7 +75,6 @@ def main() -> None:
     p_search = sub.add_parser("search", help="텍스트로 유사 문서 검색")
     p_search.add_argument("--query",       required=True)
     p_search.add_argument("--top-k",       type=int, default=10)
-    p_search.add_argument("--vector-mode", default="dense", choices=["dense", "sparse"])
 
     # info
     sub.add_parser("info", help="컬렉션 정보 출력")

@@ -1,10 +1,10 @@
-"""Milvus VectorStore - dense / sparse 지원, ColBERT 리랭킹 포함.
+"""Milvus VectorStore - dense 임베딩 검색.
 
 컬렉션 스키마:
   id      INT64 (PK)
   doc_id  VARCHAR(512)
-  text    VARCHAR(2048)   ← ColBERT 리랭킹 시 재인코딩에 사용
-  vector  FLOAT_VECTOR(dim)  또는  SPARSE_FLOAT_VECTOR
+  text    VARCHAR(2048)
+  vector  FLOAT_VECTOR(dim)
 """
 from __future__ import annotations
 
@@ -48,38 +48,29 @@ class MilvusStore:
         stats = self._client.get_collection_stats(name)
         return int(stats.get("row_count", 0))
 
-    def create_collection(self, name: str, dim: int, vector_mode: str = "dense") -> None:
+    def create_collection(self, name: str, dim: int) -> None:
         from pymilvus import MilvusClient, DataType
 
         schema = MilvusClient.create_schema(auto_id=False, enable_dynamic_field=False)
         schema.add_field("id",     DataType.INT64,   is_primary=True)
         schema.add_field("doc_id", DataType.VARCHAR, max_length=512)
         schema.add_field("text",   DataType.VARCHAR, max_length=_TEXT_MAX_BYTES)
+        schema.add_field("vector", DataType.FLOAT_VECTOR, dim=dim)
 
         index_params = MilvusClient.prepare_index_params()
-
-        if vector_mode == "sparse":
-            schema.add_field("vector", DataType.SPARSE_FLOAT_VECTOR)
-            index_params.add_index(
-                field_name="vector",
-                index_type="SPARSE_INVERTED_INDEX",
-                metric_type="IP",
-            )
-        else:
-            schema.add_field("vector", DataType.FLOAT_VECTOR, dim=dim)
-            index_params.add_index(
-                field_name="vector",
-                index_type="HNSW",
-                metric_type="COSINE",
-                params={"M": 16, "efConstruction": 100},
-            )
+        index_params.add_index(
+            field_name="vector",
+            index_type="HNSW",
+            metric_type="COSINE",
+            params={"M": 16, "efConstruction": 100},
+        )
 
         self._client.create_collection(
             collection_name=name,
             schema=schema,
             index_params=index_params,
         )
-        logger.info(f"  컬렉션 생성: {name}  mode={vector_mode}  dim={dim}")
+        logger.info(f"  컬렉션 생성: {name}  dim={dim}")
 
     def drop_collection(self, name: str) -> None:
         self._client.drop_collection(name)
@@ -87,31 +78,18 @@ class MilvusStore:
 
     # ── 데이터 삽입 ──────────────────────────────────────────────────────────
 
-    def upload(self, name: str, data_iter, vector_mode: str = "dense") -> int:
-        """(id, doc_id, text, vector) 이터레이터를 받아 Milvus에 삽입.
-
-        dense  : vector = np.ndarray (dim,)
-        sparse : vector = dict[int, float]
-        """
+    def upload(self, name: str, data_iter) -> int:
+        """(id, doc_id, text, vector) 이터레이터를 받아 Milvus에 삽입. vector: np.ndarray (dim,)"""
         batch: list[dict] = []
         total = 0
 
         for pid, doc_id, text, vec in data_iter:
-            if vector_mode == "sparse":
-                row = {
-                    "id": pid,
-                    "doc_id": doc_id,
-                    "text": _trunc(text),
-                    "vector": {int(k): float(v) for k, v in vec.items()},
-                }
-            else:
-                row = {
-                    "id": pid,
-                    "doc_id": doc_id,
-                    "text": _trunc(text),
-                    "vector": vec.tolist(),
-                }
-            batch.append(row)
+            batch.append({
+                "id": pid,
+                "doc_id": doc_id,
+                "text": _trunc(text),
+                "vector": vec.tolist(),
+            })
 
             if len(batch) >= _INSERT_BATCH:
                 self._insert_with_retry(name, batch)
@@ -143,114 +121,28 @@ class MilvusStore:
 
     # ── 검색 ─────────────────────────────────────────────────────────────────
 
-    def search(
-        self,
-        name: str,
-        vectors,
-        top_k: int = 10,
-        vector_mode: str = "dense",
-    ) -> list[list[tuple[str, float]]]:
+    def search(self, name: str, vectors, top_k: int = 10) -> list[list[tuple[str, float]]]:
         """ANN 검색. 반환: [[("doc_id", score), ...], ...]"""
-        return [
-            [(doc_id, score) for doc_id, score, _ in hits]
-            for hits in self._search_raw(name, vectors, top_k, vector_mode, with_text=False)
-        ]
-
-    def search_with_text(
-        self,
-        name: str,
-        vectors,
-        top_k: int = 10,
-        vector_mode: str = "dense",
-    ) -> list[list[tuple[str, float, str]]]:
-        """ANN 검색 + text 반환 (ColBERT 리랭킹용).
-
-        반환: [[("doc_id", score, "text"), ...], ...]
-        """
-        return self._search_raw(name, vectors, top_k, vector_mode, with_text=True)
-
-    def _search_raw(
-        self,
-        name: str,
-        vectors,
-        top_k: int,
-        vector_mode: str,
-        with_text: bool = False,
-    ) -> list[list[tuple[str, float, str]]]:
-        # 256 쿼리 × 100 결과 × text(2KB) ≈ 51MB → gRPC 64MB 초과 방지
+        # 256 쿼리 × 100 결과 ≈ gRPC 메시지 크기 초과 방지
         CHUNK = 128
-        output_fields = ["doc_id", "text"] if with_text else ["doc_id"]
-        all_results: list[list[tuple[str, float, str]]] = []
+        all_results: list[list[tuple[str, float]]] = []
 
         for start in range(0, len(vectors), CHUNK):
             end = min(start + CHUNK, len(vectors))
-
-            if vector_mode == "sparse":
-                query_data = [
-                    {int(k): float(v) for k, v in vectors[i].items()}
-                    for i in range(start, end)
-                ]
-                results = self._client.search(
-                    collection_name=name,
-                    data=query_data,
-                    anns_field="vector",
-                    search_params={"metric_type": "IP", "params": {}},
-                    limit=top_k,
-                    output_fields=output_fields,
-                )
-            else:
-                query_data = [vectors[i].tolist() for i in range(start, end)]
-                results = self._client.search(
-                    collection_name=name,
-                    data=query_data,
-                    anns_field="vector",
-                    search_params={"metric_type": "COSINE", "params": {"ef": 100}},
-                    limit=top_k,
-                    output_fields=output_fields,
-                )
-
+            query_data = [vectors[i].tolist() for i in range(start, end)]
+            results = self._client.search(
+                collection_name=name,
+                data=query_data,
+                anns_field="vector",
+                search_params={"metric_type": "COSINE", "params": {"ef": 100}},
+                limit=top_k,
+                output_fields=["doc_id"],
+            )
             for hits in results:
-                all_results.append([
-                    (h["entity"]["doc_id"], h["distance"], h["entity"].get("text", ""))
-                    for h in hits
-                ])
+                all_results.append([(h["entity"]["doc_id"], h["distance"]) for h in hits])
 
         return all_results
 
-    def search_one(
-        self,
-        name: str,
-        vector,
-        top_k: int = 10,
-        vector_mode: str = "dense",
-    ) -> list[tuple[str, float]]:
+    def search_one(self, name: str, vector, top_k: int = 10) -> list[tuple[str, float]]:
         vec = np.array(vector, dtype=np.float32) if not isinstance(vector, np.ndarray) else vector
-        return self.search(name, [vec], top_k=top_k, vector_mode=vector_mode)[0]
-
-    # ── ColBERT 리랭킹 ───────────────────────────────────────────────────────
-
-    @staticmethod
-    def colbert_rerank(
-        candidates: list[tuple[str, float, str]],
-        query_tok_vecs: np.ndarray,
-        doc_tok_vecs: list[np.ndarray],
-        top_k: int,
-    ) -> list[tuple[str, float]]:
-        """MaxSim late interaction 리랭킹.
-
-        Args:
-            candidates:      search_with_text() 결과 한 쿼리분
-            query_tok_vecs:  shape (num_q_tokens, dim)
-            doc_tok_vecs:    candidates 순서와 동일, 각 shape (num_d_tokens, dim)
-            top_k:           최종 반환 수
-        Returns:
-            [(doc_id, colbert_score), ...]  내림차순
-        """
-        qv = query_tok_vecs / (np.linalg.norm(query_tok_vecs, axis=1, keepdims=True) + 1e-9)
-        scored: list[tuple[str, float]] = []
-        for (doc_id, _, _), dv_raw in zip(candidates, doc_tok_vecs):
-            dv = dv_raw / (np.linalg.norm(dv_raw, axis=1, keepdims=True) + 1e-9)
-            sim = qv @ dv.T          # (q_tokens, d_tokens)
-            score = float(sim.max(axis=1).sum())
-            scored.append((doc_id, score))
-        return sorted(scored, key=lambda x: x[1], reverse=True)[:top_k]
+        return self.search(name, [vec], top_k=top_k)[0]

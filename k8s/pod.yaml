@@ -1,3 +1,13 @@
+# 수동 디버그용 Pod — sleep infinity로 띄운 뒤 exec로 들어가서
+# retrieval_runner.py / rerank_runner.py를 직접 실행/테스트할 때 사용합니다.
+#
+# 실행: kubectl apply -f k8s/pod.yaml
+# 접속: kubectl exec -it ard-milvus -- /bin/sh
+#   $ python -m milvus_migration.bench.retrieval_runner --data-root /data --out /results/retrieval
+#   $ python -m milvus_migration.bench.rerank_runner --retrieval-result /results/retrieval/*.json \
+#         --rerank-model qwen3-reranker --data-root /data --out /results/rerank
+# 결과 확인: kubectl cp ard-milvus:/results ./results
+# 삭제: kubectl delete pod ard-milvus
 apiVersion: v1
 kind: Pod
 metadata:
@@ -10,54 +20,34 @@ spec:
     - name: ard-milvus
       image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
       imagePullPolicy: Always
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          python -m milvus_migration.bench.runner \
-            --data-root /data \
-            --out /tmp/results \
-            --search-concurrency 1 4 8 16 &&
-          git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
-          cp /tmp/results/*.json /tmp/repo/results/ &&
-          cd /tmp/repo &&
-          git config user.email "bench-bot@pod" &&
-          git config user.name "bench-bot" &&
-          git add results/ &&
-          git commit -m "bench: add results $(date +%Y%m%d_%H%M%S)" &&
-          git push
+      command: ["sleep", "infinity"]
       env:
         - name: MILVUS_URI
           value: "http://milvus:19530"
-        - name: MILVUS_COLLECTION
-          value: "documents"
+        - name: EMBEDDING_MODEL
+          value: "bge-m3"
+        - name: EMBEDDING_BATCH_SIZE
+          value: "512"
+        - name: EMBEDDING_TIMEOUT
+          value: "300"
         - name: EMBEDDING_API_ENDPOINT
           valueFrom:
             secretKeyRef:
               name: milvus-migration-secret
               key: EMBEDDING_API_ENDPOINT
-        - name: EMBEDDING_MODEL
-          value: "bge-m3"
-        - name: EMBEDDING_DIM
-          value: "1024"
-        - name: EMBEDDING_BATCH_SIZE
-          value: "2048"
-        - name: EMBEDDING_TIMEOUT
-          value: "300"
-        - name: MILVUS_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: milvus-migration-secret
-              key: MILVUS_TOKEN
-        - name: GITHUB_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: milvus-migration-secret
-              key: GITHUB_TOKEN
         - name: EMBEDDING_API_KEY
           valueFrom:
             secretKeyRef:
               name: milvus-migration-secret
               key: EMBEDDING_API_KEY
+        - name: MILVUS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: milvus-migration-secret
+              key: MILVUS_TOKEN
+      volumeMounts:
+        - name: bench-results
+          mountPath: /results
       resources:
         requests:
           cpu: "250m"
@@ -65,3 +55,7 @@ spec:
         limits:
           cpu: "2"
           memory: "4Gi"
+  volumes:
+    - name: bench-results
+      persistentVolumeClaim:
+        claimName: bench-results

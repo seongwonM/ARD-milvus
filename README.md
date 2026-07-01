@@ -1,6 +1,7 @@
 # Milvus Migration
 
 Cloud Platform Embedding API + Milvus VectorDB 기반 문서 인덱싱 및 검색 패키지.
+`bench/`에는 별도로 실행 가능한 2단계 벤치마크(retrieval → reranking)가 포함되어 있습니다.
 
 ## 설치
 
@@ -21,12 +22,13 @@ cp .env.example .env
 | `EMBEDDING_API_ENDPOINT` | ✅ | - | Cloud Platform 임베딩 API URL |
 | `EMBEDDING_API_KEY` | - | `""` | API 인증 키 |
 | `EMBEDDING_MODEL` | - | `text-embedding-3-small` | 모델명 |
-| `EMBEDDING_DIM` | - | `1536` | 모델 출력 벡터 차원 |
 | `EMBEDDING_BATCH_SIZE` | - | `64` | API 호출당 최대 텍스트 수 |
 | `EMBEDDING_TIMEOUT` | - | `60` | API 타임아웃 (초) |
 | `MILVUS_URI` | - | `http://localhost:19530` | Milvus 서버 주소 |
 | `MILVUS_TOKEN` | - | `""` | Milvus 인증 토큰 |
 | `MILVUS_COLLECTION` | - | `documents` | 기본 컬렉션 이름 |
+
+임베딩 차원(dim)은 설정하지 않아도 됩니다 — 첫 API 응답으로 자동 감지합니다.
 
 ## 사용법
 
@@ -59,7 +61,6 @@ results = pipe.search(["쿼리1", "쿼리2"], top_k=3)
 |---|---|---|---|
 | `docs` | `list[dict]` | - | `{"id": ..., "text": ...}` 리스트 |
 | `collection` | `str \| None` | env 값 | 컬렉션 이름 |
-| `vector_mode` | `"dense" \| "sparse"` | `"dense"` | 벡터 타입 |
 | `recreate` | `bool` | `False` | 기존 컬렉션 삭제 후 재생성 |
 | `batch_size` | `int \| None` | env 값 | 임베딩 배치 크기 |
 
@@ -70,7 +71,6 @@ results = pipe.search(["쿼리1", "쿼리2"], top_k=3)
 | `query` | `str \| list[str]` | - | 검색 쿼리 |
 | `top_k` | `int` | `10` | 반환할 최대 결과 수 |
 | `collection` | `str \| None` | env 값 | 컬렉션 이름 |
-| `vector_mode` | `"dense" \| "sparse"` | `"dense"` | 벡터 타입 |
 
 ### CLI
 
@@ -79,7 +79,6 @@ results = pipe.search(["쿼리1", "쿼리2"], top_k=3)
 ```bash
 python -m milvus_migration.main index --file docs.json
 python -m milvus_migration.main index --file docs.json --recreate          # 기존 컬렉션 초기화
-python -m milvus_migration.main index --file docs.json --vector-mode sparse
 ```
 
 JSON 파일 형식:
@@ -120,15 +119,72 @@ def _parse_response(self, data: dict) -> list[list[float]]:
     return [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
 ```
 
+## 벤치마크 (`bench/`)
+
+Retrieval(임베딩 모델별 top-100 후보 검색)과 Reranking(리랭커 성능 측정)을 완전히 분리했습니다.
+Retrieval 결과는 한 번 계산되면 재사용되며, Reranking은 그 결과를 그대로 읽어서만 동작하므로
+Milvus나 임베딩 API를 다시 호출하지 않습니다.
+
+### 1단계 — Retrieval
+
+모델별로 문서를 인덱싱하고 쿼리마다 top-100 후보 doc-id를 검색해 로그에 출력하고 JSON으로 저장합니다.
+
+```bash
+python -m milvus_migration.bench.retrieval_runner --data-root /data --out results/retrieval
+```
+
+- 모델 선택은 `EMBEDDING_MODEL` 환경변수로 합니다 (모델마다 스크립트를 따로 실행).
+- 결과 파일이 이미 있으면 재검색하지 않고 스킵합니다 (`--force`로 강제 재실행).
+- 결과 형식: `{"model": ..., "results": {"query_id": ["doc_id", ...100개], ...}}`
+
+### 2단계 — Reranking
+
+1단계에서 저장된 top-100 후보에서 top_n(5/10/20/50/100)개만 잘라 리랭커 API에 넣고
+소요 시간과 성능 지표(NDCG/MRR/Recall/MAP — `evaluator.py`)를 함께 측정합니다.
+
+```bash
+python -m milvus_migration.bench.rerank_runner \
+    --retrieval-result results/retrieval/bge_m3_top100.json \
+    --rerank-model qwen3-reranker \
+    --data-root /data \
+    --out results/rerank
+```
+
+- `--retrieval-result`, `--rerank-model`, `--top-n`은 여러 개를 넘기면 모든 조합을 순회합니다.
+- Rerank API는 Embedding API와 동일한 endpoint/헤더를 사용합니다 (`RerankClient`, `bench/reranker.py`).
+
+### k8s
+
+- `k8s/bench-jobs.yaml` — retrieval 3개 모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) Job + 결과 공유용 PVC(`bench-results`)
+- `k8s/rerank-job.yaml` — retrieval Job들이 끝난 뒤 적용하는 reranking Job
+- `k8s/pod.yaml` — 수동 디버그용 Pod (`kubectl exec`로 들어가 직접 실행)
+- `k8s/fetch-results.ps1` — Job 완료를 기다렸다가 결과 JSON/로그를 로컬 `results/`로 자동 복사
+  (`./k8s/fetch-results.ps1 -Stage retrieval`, `-Stage rerank`, `-Stage all`)
+
+> retrieval 결과 PVC(`bench-results`)는 3개 Job이 동시에 마운트하므로 `ReadWriteMany`(AKS `azurefile`
+> StorageClass)로 만들어져 있습니다. `ReadWriteOnce`로 바꾸면 동시 실행 시 volume attach 대기로 멈춥니다.
+
 ## 파일 구조
 
 ```
 milvus_migration/
-├── config.py        # 환경변수 설정
-├── embedding.py     # Cloud Platform API 클라이언트
-├── milvus_store.py  # Milvus CRUD (dense / sparse)
-├── pipeline.py      # 인덱싱 + 검색 파이프라인
-├── main.py          # CLI 진입점
+├── config.py             # 환경변수 설정
+├── embedding.py          # Cloud Platform Embedding API 클라이언트
+├── milvus_store.py       # Milvus CRUD
+├── pipeline.py           # 인덱싱 + 검색 파이프라인
+├── main.py                # CLI 진입점
+├── bench/
+│   ├── data_loader.py     # parquet 데이터 로더
+│   ├── evaluator.py       # NDCG / MRR / Recall / MAP
+│   ├── reranker.py        # Rerank API 클라이언트
+│   ├── retrieval_runner.py  # 1단계: 임베딩 모델별 top-100 검색 및 저장
+│   └── rerank_runner.py     # 2단계: 저장된 후보 기반 리랭킹 벤치마크
+├── k8s/
+│   ├── bench-jobs.yaml    # retrieval Job × 3 + PVC(ReadWriteMany)
+│   ├── rerank-job.yaml    # reranking Job
+│   ├── pod.yaml           # 디버그용 Pod
+│   ├── fetch-results.ps1  # 결과 로컬 자동 복사 스크립트
+│   └── milvus.yaml        # Milvus standalone
 ├── requirements.txt
 └── .env.example
 ```

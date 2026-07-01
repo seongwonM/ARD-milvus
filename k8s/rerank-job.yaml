@@ -1,0 +1,63 @@
+# Reranking Job — retrieval Job 3개(k8s/bench-jobs.yaml)가 모두 완료된 뒤 적용하세요.
+# 3개 retrieval 결과 × 2개 리랭커(qwen3-reranker, bge-reranker-v2-m3) × top_n 5/10/20/50/100 조합을 순차 실행합니다.
+#
+# 실행:
+#   kubectl wait --for=condition=complete \
+#     job/bench-retrieval-hcp job/bench-retrieval-m3 job/bench-retrieval-qwen3 --timeout=3600s
+#   kubectl apply -f k8s/rerank-job.yaml
+#
+# 삭제: kubectl delete job bench-rerank
+# 로그: kubectl logs job/bench-rerank
+# 결과를 로컬로 자동 복사: ./k8s/fetch-results.ps1 -Stage rerank  (Job 완료까지 대기 후 results/에 저장)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-rerank
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              python -m milvus_migration.bench.rerank_runner \
+                --retrieval-result \
+                  /results/retrieval/hcp_llm_latest_top100.json \
+                  /results/retrieval/bge_m3_top100.json \
+                  /results/retrieval/qwen3_embedding_8b_top100.json \
+                --rerank-model qwen3-reranker bge-reranker-v2-m3 \
+                --top-n 5 10 20 50 100 \
+                --data-root /data \
+                --out /results/rerank
+          env:
+            - name: EMBEDDING_TIMEOUT
+              value: "120"
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+          volumeMounts:
+            - name: bench-results
+              mountPath: /results
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: bench-results
+          persistentVolumeClaim:
+            claimName: bench-results

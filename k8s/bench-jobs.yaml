@@ -1,14 +1,36 @@
-# 6가지 콤보 벤치마크 Job
-# Secret: milvus-migration-secret
-# 실행: kubectl apply -f k8s/bench-jobs.yaml
-# 삭제: kubectl delete job bench-dense bench-dense-colbert bench-sparse bench-sparse-colbert bench-qwen3-8b bench-qwen3-8b-colbert
-# 로그: kubectl logs job/bench-dense
+# Retrieval 3모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) 벤치마크 Job
+# Reranking은 k8s/rerank-job.yaml — 이 Job들이 모두 끝난 뒤 별도 적용하세요.
+# Secret: milvus-migration-secret (EMBEDDING_API_ENDPOINT, EMBEDDING_API_KEY, MILVUS_TOKEN)
+#
+# 실행: kubectl apply -f k8s/bench-jobs.yaml   # PVC + 3개 retrieval Job 동시 생성
+# 삭제: kubectl delete job bench-retrieval-hcp bench-retrieval-m3 bench-retrieval-qwen3
+# 로그: kubectl logs job/bench-retrieval-hcp  (검색된 top-100 id 전체가 로그에 찍힘)
+# 결과를 로컬로 자동 복사: ./k8s/fetch-results.ps1 -Stage retrieval  (Job 완료까지 대기 후 results/에 저장)
+#
+# retrieval 결과는 PVC(bench-results)에 남아있는 한 재사용됩니다 — 이미 저장된 모델은
+# retrieval_runner.py가 자동으로 재검색을 스킵합니다.
 
-# ── 1. dense ──────────────────────────────────────────────────────────────────
+# ── 결과 공유용 PVC (retrieval 3개 Job이 동시에 마운트 → ReadWriteMany 필수) ─────────
+# ReadWriteOnce(Azure Disk)로 하면 동시 실행되는 Job들이 볼륨 attach를 기다리며 멈춥니다.
+# AKS 기본 제공 azurefile StorageClass(ReadWriteMany 지원) 사용. 클러스터에 없다면
+# `kubectl get storageclass`로 ReadWriteMany 지원 클래스명을 확인해 교체하세요.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bench-results
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile
+  resources:
+    requests:
+      storage: 5Gi
+---
+# ── 1. Retrieval: HCP-LLM-Latest ─────────────────────────────────────────────
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: bench-dense
+  name: bench-retrieval-hcp
 spec:
   backoffLimit: 0
   template:
@@ -21,28 +43,73 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              python -m milvus_migration.bench.runner \
-                --vector-mode dense \
+              python -m milvus_migration.bench.retrieval_runner \
                 --data-root /data \
-                --out /tmp/results \
-                --search-concurrency 1 4 8 16 &&
-              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
-              cp /tmp/results/*.json /tmp/repo/results/ &&
-              cd /tmp/repo &&
-              git config user.email "bench-bot@pod" &&
-              git config user.name "bench-bot" &&
-              git add results/ &&
-              git commit -m "bench: dense $(date +%Y%m%d_%H%M%S)" &&
-              git push
+                --out /results/retrieval
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
-            - name: MILVUS_COLLECTION
-              value: "documents"
+            - name: EMBEDDING_MODEL
+              value: "HCP-LLM-Latest"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "256"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: MILVUS_TOKEN
+          volumeMounts:
+            - name: bench-results
+              mountPath: /results
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: bench-results
+          persistentVolumeClaim:
+            claimName: bench-results
+---
+# ── 2. Retrieval: bge-m3 ──────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-retrieval-m3
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              python -m milvus_migration.bench.retrieval_runner \
+                --data-root /data \
+                --out /results/retrieval
+          env:
+            - name: MILVUS_URI
+              value: "http://milvus:19530"
             - name: EMBEDDING_MODEL
               value: "bge-m3"
-            - name: EMBEDDING_DIM
-              value: "1024"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -62,11 +129,9 @@ spec:
                 secretKeyRef:
                   name: milvus-migration-secret
                   key: MILVUS_TOKEN
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: GITHUB_TOKEN
+          volumeMounts:
+            - name: bench-results
+              mountPath: /results
           resources:
             requests:
               cpu: "250m"
@@ -74,12 +139,16 @@ spec:
             limits:
               cpu: "2"
               memory: "4Gi"
+      volumes:
+        - name: bench-results
+          persistentVolumeClaim:
+            claimName: bench-results
 ---
-# ── 2. dense + ColBERT ────────────────────────────────────────────────────────
+# ── 3. Retrieval: Qwen3-Embedding-8B ─────────────────────────────────────────
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: bench-dense-colbert
+  name: bench-retrieval-qwen3
 spec:
   backoffLimit: 0
   template:
@@ -92,241 +161,14 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              python -m milvus_migration.bench.runner \
-                --vector-mode dense \
-                --colbert-rerank \
+              python -m milvus_migration.bench.retrieval_runner \
                 --data-root /data \
-                --out /tmp/results \
-                --search-concurrency 1 4 8 16 &&
-              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
-              cp /tmp/results/*.json /tmp/repo/results/ &&
-              cd /tmp/repo &&
-              git config user.email "bench-bot@pod" &&
-              git config user.name "bench-bot" &&
-              git add results/ &&
-              git commit -m "bench: dense-colbert $(date +%Y%m%d_%H%M%S)" &&
-              git push
+                --out /results/retrieval
           env:
             - name: MILVUS_URI
               value: "http://milvus:19530"
-            - name: MILVUS_COLLECTION
-              value: "documents"
-            - name: EMBEDDING_MODEL
-              value: "bge-m3"
-            - name: EMBEDDING_DIM
-              value: "1024"
-            - name: EMBEDDING_BATCH_SIZE
-              value: "2048"
-            - name: EMBEDDING_TIMEOUT
-              value: "300"
-            - name: EMBEDDING_API_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_ENDPOINT
-            - name: EMBEDDING_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_KEY
-            - name: MILVUS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: MILVUS_TOKEN
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: GITHUB_TOKEN
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "2Gi"
-            limits:
-              cpu: "2"
-              memory: "4Gi"
----
-# ── 3. sparse ─────────────────────────────────────────────────────────────────
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bench-sparse
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              python -m milvus_migration.bench.runner \
-                --vector-mode sparse \
-                --data-root /data \
-                --out /tmp/results &&
-              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
-              cp /tmp/results/*.json /tmp/repo/results/ &&
-              cd /tmp/repo &&
-              git config user.email "bench-bot@pod" &&
-              git config user.name "bench-bot" &&
-              git add results/ &&
-              git commit -m "bench: sparse $(date +%Y%m%d_%H%M%S)" &&
-              git push
-          env:
-            - name: MILVUS_URI
-              value: "http://milvus:19530"
-            - name: MILVUS_COLLECTION
-              value: "documents"
-            - name: EMBEDDING_MODEL
-              value: "bge-m3"
-            - name: EMBEDDING_DIM
-              value: "1024"
-            - name: EMBEDDING_BATCH_SIZE
-              value: "2048"
-            - name: EMBEDDING_TIMEOUT
-              value: "300"
-            - name: EMBEDDING_API_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_ENDPOINT
-            - name: EMBEDDING_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_KEY
-            - name: MILVUS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: MILVUS_TOKEN
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: GITHUB_TOKEN
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "2Gi"
-            limits:
-              cpu: "2"
-              memory: "4Gi"
----
-# ── 4. sparse + ColBERT ───────────────────────────────────────────────────────
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bench-sparse-colbert
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              python -m milvus_migration.bench.runner \
-                --vector-mode sparse \
-                --colbert-rerank \
-                --data-root /data \
-                --out /tmp/results &&
-              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
-              cp /tmp/results/*.json /tmp/repo/results/ &&
-              cd /tmp/repo &&
-              git config user.email "bench-bot@pod" &&
-              git config user.name "bench-bot" &&
-              git add results/ &&
-              git commit -m "bench: sparse-colbert $(date +%Y%m%d_%H%M%S)" &&
-              git push
-          env:
-            - name: MILVUS_URI
-              value: "http://milvus:19530"
-            - name: MILVUS_COLLECTION
-              value: "documents"
-            - name: EMBEDDING_MODEL
-              value: "bge-m3"
-            - name: EMBEDDING_DIM
-              value: "1024"
-            - name: EMBEDDING_BATCH_SIZE
-              value: "2048"
-            - name: EMBEDDING_TIMEOUT
-              value: "300"
-            - name: EMBEDDING_API_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_ENDPOINT
-            - name: EMBEDDING_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_KEY
-            - name: MILVUS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: MILVUS_TOKEN
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: GITHUB_TOKEN
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "2Gi"
-            limits:
-              cpu: "2"
-              memory: "4Gi"
----
-# ── 5. Qwen3-8B dense ─────────────────────────────────────────────────────────
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bench-qwen3-8b
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              python -m milvus_migration.bench.runner \
-                --vector-mode dense \
-                --data-root /data \
-                --out /tmp/results \
-                --search-concurrency 1 4 8 16 &&
-              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
-              cp /tmp/results/*.json /tmp/repo/results/ &&
-              cd /tmp/repo &&
-              git config user.email "bench-bot@pod" &&
-              git config user.name "bench-bot" &&
-              git add results/ &&
-              git commit -m "bench: qwen3-8b $(date +%Y%m%d_%H%M%S)" &&
-              git push
-          env:
-            - name: MILVUS_URI
-              value: "http://milvus:19530"
-            - name: MILVUS_COLLECTION
-              value: "documents"
             - name: EMBEDDING_MODEL
               value: "Qwen3-Embedding-8B"
-            - name: EMBEDDING_DIM
-              value: "4096"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -346,11 +188,9 @@ spec:
                 secretKeyRef:
                   name: milvus-migration-secret
                   key: MILVUS_TOKEN
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: GITHUB_TOKEN
+          volumeMounts:
+            - name: bench-results
+              mountPath: /results
           resources:
             requests:
               cpu: "250m"
@@ -358,75 +198,7 @@ spec:
             limits:
               cpu: "2"
               memory: "8Gi"
----
-# ── 6. Qwen3-8B dense + ColBERT ───────────────────────────────────────────────
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bench-qwen3-8b-colbert
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:b4c26b012669746de26891cb5241d23832b98107
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              python -m milvus_migration.bench.runner \
-                --vector-mode dense \
-                --colbert-rerank \
-                --data-root /data \
-                --out /tmp/results \
-                --search-concurrency 1 4 8 16 &&
-              git clone https://$(GITHUB_TOKEN)@github.com/seongwonM/ARD-milvus.git /tmp/repo &&
-              cp /tmp/results/*.json /tmp/repo/results/ &&
-              cd /tmp/repo &&
-              git config user.email "bench-bot@pod" &&
-              git config user.name "bench-bot" &&
-              git add results/ &&
-              git commit -m "bench: qwen3-8b-colbert $(date +%Y%m%d_%H%M%S)" &&
-              git push
-          env:
-            - name: MILVUS_URI
-              value: "http://milvus:19530"
-            - name: MILVUS_COLLECTION
-              value: "documents"
-            - name: EMBEDDING_MODEL
-              value: "Qwen3-Embedding-8B"
-            - name: EMBEDDING_DIM
-              value: "4096"
-            - name: EMBEDDING_BATCH_SIZE
-              value: "512"
-            - name: EMBEDDING_TIMEOUT
-              value: "300"
-            - name: EMBEDDING_API_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_ENDPOINT
-            - name: EMBEDDING_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_KEY
-            - name: MILVUS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: MILVUS_TOKEN
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: GITHUB_TOKEN
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "4Gi"
-            limits:
-              cpu: "2"
-              memory: "8Gi"
+      volumes:
+        - name: bench-results
+          persistentVolumeClaim:
+            claimName: bench-results
