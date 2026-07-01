@@ -15,6 +15,9 @@ class MilvusConfig:
 @dataclass
 class EmbeddingConfig:
     endpoint: str   = field(default_factory=lambda: os.environ["EMBEDDING_API_ENDPOINT"])
+    # rerank API는 embedding과 헤더/인증은 같지만 경로가 다름 (.../embeddings 대신 .../rerank).
+    # 미설정 시 endpoint의 마지막 경로만 "rerank"로 바꿔서 자동 유도.
+    rerank_endpoint: str = field(default_factory=lambda: os.environ.get("RERANK_API_ENDPOINT", ""))
     api_key: str    = field(default_factory=lambda: os.environ.get("EMBEDDING_API_KEY", ""))
     model: str      = field(default_factory=lambda: os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"))
     # 8B 모델 (EMBEDDING_MODEL_8B 미설정 시 8B 조합 스킵)

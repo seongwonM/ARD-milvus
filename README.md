@@ -168,7 +168,9 @@ python -m milvus_migration.bench.rerank_runner \
 ```
 
 - `--retrieval-result`, `--rerank-model`, `--embedding-rerank-model`, `--top-n`은 여러 개를 넘기면 모든 조합을 순회합니다.
-- 두 방식 모두 endpoint/헤더는 Embedding API와 동일합니다 (`RerankClient`/`EmbeddingClient`, `bench/reranker.py`).
+- `--embedding-rerank-model`은 Embedding API를 그대로 씁니다. `--rerank-model`(전용 rerank API)은 헤더/인증은
+  같지만 경로가 다릅니다 (`.../embeddings` 대신 `.../rerank`) — `RERANK_API_ENDPOINT` 환경변수로 명시하거나,
+  미설정 시 `EMBEDDING_API_ENDPOINT`의 마지막 경로만 `rerank`로 바꿔서 자동 유도합니다 (`bench/reranker.py`).
 
 ### k8s
 

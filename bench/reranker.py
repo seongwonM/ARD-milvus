@@ -1,7 +1,11 @@
 """Cloud Platform Rerank API 클라이언트.
 
-요청 형식 (EmbeddingConfig의 endpoint/헤더 재사용):
-    POST {endpoint}
+embedding API와 헤더/인증은 같지만 경로가 다릅니다 (예: .../embeddings 대신 .../rerank).
+RERANK_API_ENDPOINT 환경변수로 명시하거나, 미설정 시 EMBEDDING_API_ENDPOINT의 마지막
+경로 세그먼트만 "rerank"로 바꿔서 자동 유도합니다.
+
+요청 형식:
+    POST {rerank_endpoint}
     Headers: Authorization: Bearer {api_key}
     Body: {"model": "...", "query": "...", "documents": ["...", ...], "top_n": N}
 
@@ -20,10 +24,17 @@ from ..config import EmbeddingConfig
 logger = logging.getLogger(__name__)
 
 
+def _derive_rerank_endpoint(embedding_endpoint: str) -> str:
+    base, _, _last = embedding_endpoint.rpartition("/")
+    return f"{base}/rerank" if base else embedding_endpoint
+
+
 class RerankClient:
 
     def __init__(self, config: EmbeddingConfig) -> None:
         self._config = config
+        self._endpoint = config.rerank_endpoint or _derive_rerank_endpoint(config.endpoint)
+        logger.info(f"[Rerank] endpoint: {self._endpoint}")
         self._session = requests.Session()
         self._session.headers.update({
             "Content-Type": "application/json",
@@ -41,7 +52,7 @@ class RerankClient:
         for attempt in range(3):
             try:
                 resp = self._session.post(
-                    self._config.endpoint, json=payload, timeout=self._config.timeout,
+                    self._endpoint, json=payload, timeout=self._config.timeout,
                 )
                 resp.raise_for_status()
                 results = resp.json()["results"]
