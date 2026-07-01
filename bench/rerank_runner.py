@@ -118,6 +118,9 @@ def main() -> None:
     docs, queries, qrels = load_from_dir(args.data_root)
     os.makedirs(args.out, exist_ok=True)
 
+    all_results: list[dict] = []
+    run_timestamp = time.strftime("%Y%m%d_%H%M%S")
+
     for retrieval_path in args.retrieval_result:
         with open(retrieval_path, encoding="utf-8") as f:
             retrieval_data = json.load(f)
@@ -133,6 +136,7 @@ def main() -> None:
                 result = run_rerank(
                     client, rerank_model, retrieval_model, candidates, docs, queries, qrels, n,
                 )
+                all_results.append(result)
 
                 out_name = (
                     f"{_safe_name(retrieval_model)}__{_safe_name(rerank_model)}"
@@ -143,9 +147,14 @@ def main() -> None:
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 logger.info(f"저장: {out_path}")
 
-                print("\n===== RERANK RESULT JSON =====")
-                print(json.dumps(result, ensure_ascii=False, indent=2))
-                print("===== END =====")
+    summary_path = os.path.join(args.out, f"summary_{run_timestamp}.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, ensure_ascii=False, indent=2)
+    logger.info(f"\n요약 저장 ({len(all_results)}개 조합): {summary_path}")
+
+    print("\n===== RERANK SUMMARY JSON =====")
+    print(json.dumps(all_results, ensure_ascii=False, indent=2))
+    print("===== END =====")
 
 
 if __name__ == "__main__":

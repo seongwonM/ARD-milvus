@@ -22,19 +22,27 @@ import re
 import time
 
 from milvus_migration.bench.data_loader import load_from_dir
+from milvus_migration.bench.evaluator import evaluate
 from milvus_migration.config import Config
 from milvus_migration.embedding import EmbeddingClient
-from milvus_migration.milvus_store import MilvusStore
+from milvus_migration.milvus_store import MilvusStore, _trunc, _TEXT_MAX_BYTES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-_MILVUS_INSERT_BATCH = 5_000
+# gRPC 기본 메시지 크기 제한(64MB)보다 한참 여유있게 — 고차원 모델(Qwen3 dim=4096 등)에서
+# insert batch가 너무 크면 "received message larger than max" 에러가 남
+_INSERT_BUDGET_BYTES = 20_000_000
 _TOP_K = 100
 
 
 def _safe_name(model_id: str) -> str:
     return re.sub(r"[^a-z0-9_]", "_", model_id.lower())[:200]
+
+
+def _insert_batch_size(dim: int) -> int:
+    per_row = dim * 4 + _TEXT_MAX_BYTES + 600  # vector(float32) + text + doc_id/protobuf 오버헤드
+    return max(200, min(5_000, _INSERT_BUDGET_BYTES // per_row))
 
 
 def _build_index(
@@ -48,6 +56,8 @@ def _build_index(
     store.create_collection(collection, dim=dim)
     doc_ids = list(docs.keys())
     n_total = len(doc_ids)
+    insert_batch = _insert_batch_size(dim)
+    logger.info(f"  insert batch size: {insert_batch} (dim={dim})")
 
     t0 = time.time()
     pid = 0
@@ -61,10 +71,10 @@ def _build_index(
         ]
         embs = client.encode(texts, batch_size=batch_size)
         for doc_id, text, vec in zip(chunk_ids, texts, embs):
-            pending.append({"id": pid, "doc_id": doc_id, "text": text, "vector": vec.tolist()})
+            pending.append({"id": pid, "doc_id": doc_id, "text": _trunc(text), "vector": vec.tolist()})
             pid += 1
 
-        if len(pending) >= _MILVUS_INSERT_BATCH:
+        if len(pending) >= insert_batch:
             store._insert_with_retry(collection, pending)
             pending.clear()
             elapsed = round(time.time() - t0, 1)
@@ -82,7 +92,7 @@ def _build_index(
     return elapsed, dps
 
 
-def run_retrieval(cfg: Config, docs: dict, queries: dict, out_path: str) -> dict:
+def run_retrieval(cfg: Config, docs: dict, queries: dict, qrels: dict, out_path: str) -> dict:
     client = EmbeddingClient(cfg.embedding)
     store = MilvusStore(cfg.milvus.uri, cfg.milvus.token)
 
@@ -111,19 +121,35 @@ def run_retrieval(cfg: Config, docs: dict, queries: dict, out_path: str) -> dict
     t0 = time.time()
     q_embs = client.encode(q_texts, batch_size=cfg.embedding.batch_size)
     query_encode_sec = round(time.time() - t0, 2)
-    logger.info(f"query 인코딩 완료: {query_encode_sec}s")
+    query_encode_qps = round(len(q_ids) / query_encode_sec, 1) if query_encode_sec > 0 else 0.0
+    logger.info(f"query 인코딩 완료: {query_encode_sec}s  ({query_encode_qps} q/s)")
 
     logger.info(f"검색 (top-{_TOP_K})...")
     t0 = time.time()
     raw_results = store.search(collection, q_embs, top_k=_TOP_K)
     search_sec = round(time.time() - t0, 2)
-    logger.info(f"검색 완료: {search_sec}s")
+    search_qps = round(len(q_ids) / search_sec, 1) if search_sec > 0 else 0.0
+    logger.info(f"검색 완료: {search_sec}s  ({search_qps} q/s)")
 
+    _LOG_SAMPLE = 5
     results: dict[str, list[str]] = {}
-    for qid, hits in zip(q_ids, raw_results):
-        ids = [doc_id for doc_id, _ in hits]
-        results[qid] = ids
-        logger.info(f"  [{qid}] top{len(ids)} 후보: {ids}")
+    run: dict[str, dict[str, float]] = {}
+    for i, (qid, hits) in enumerate(zip(q_ids, raw_results)):
+        results[qid] = [doc_id for doc_id, _ in hits]
+        run[qid] = {doc_id: score for doc_id, score in hits}
+        if i < _LOG_SAMPLE:
+            logger.info(f"  [샘플 {i+1}/{_LOG_SAMPLE}] [{qid}] top{len(hits)} 후보: {results[qid]}")
+    logger.info(f"  검색 결과 {len(results):,}개 쿼리 확보 (전체 top-{_TOP_K} 후보는 JSON 파일에 저장됨)")
+
+    metrics = evaluate(run, qrels)
+    logger.info(
+        f"  [리랭킹 전 raw 검색 성능] NDCG@10={metrics.get('ndcg_at_10')}  @20={metrics.get('ndcg_at_20')}  "
+        f"@50={metrics.get('ndcg_at_50')}  @100={metrics.get('ndcg_at_100')}"
+    )
+    logger.info(
+        f"  MRR@10={metrics.get('mrr_at_10')}  "
+        f"Recall@10={metrics.get('recall_at_10')}  @50={metrics.get('recall_at_50')}  @100={metrics.get('recall_at_100')}"
+    )
 
     payload = {
         "model": model_id,
@@ -135,8 +161,11 @@ def run_retrieval(cfg: Config, docs: dict, queries: dict, out_path: str) -> dict
         "index_build_sec": index_build_sec,
         "index_docs_per_sec": index_docs_per_sec,
         "query_encode_sec": query_encode_sec,
+        "query_encode_qps": query_encode_qps,
         "search_sec": search_sec,
+        "search_qps": search_qps,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        **metrics,
         "results": results,
     }
 
@@ -162,9 +191,9 @@ def main() -> None:
         return
 
     logger.info(f"모델={cfg.embedding.model}  Milvus={cfg.milvus.uri}  data_root={args.data_root}")
-    docs, queries, _qrels = load_from_dir(args.data_root)
+    docs, queries, qrels = load_from_dir(args.data_root)
 
-    result = run_retrieval(cfg, docs, queries, out_path)
+    result = run_retrieval(cfg, docs, queries, qrels, out_path)
 
     print("\n===== RETRIEVAL RESULT SUMMARY =====")
     print(json.dumps({k: v for k, v in result.items() if k != "results"}, ensure_ascii=False, indent=2))

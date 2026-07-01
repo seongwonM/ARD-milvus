@@ -135,7 +135,8 @@ python -m milvus_migration.bench.retrieval_runner --data-root /data --out result
 
 - 모델 선택은 `EMBEDDING_MODEL` 환경변수로 합니다 (모델마다 스크립트를 따로 실행).
 - 결과 파일이 이미 있으면 재검색하지 않고 스킵합니다 (`--force`로 강제 재실행).
-- 결과 형식: `{"model": ..., "results": {"query_id": ["doc_id", ...100개], ...}}`
+- raw dense 검색(리랭킹 전) 자체의 NDCG/MRR/Recall/MAP과 query_encode_qps/search_qps도 같이 계산해 저장합니다.
+- 결과 형식: `{"model": ..., "ndcg_at_10": ..., "search_qps": ..., "results": {"query_id": ["doc_id", ...100개], ...}}`
 
 ### 2단계 — Reranking
 

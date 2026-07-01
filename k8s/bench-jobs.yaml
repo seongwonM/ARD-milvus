@@ -52,7 +52,7 @@ spec:
             - name: EMBEDDING_MODEL
               value: "HCP-LLM-Latest"
             - name: EMBEDDING_BATCH_SIZE
-              value: "256"
+              value: "512"
             - name: EMBEDDING_TIMEOUT
               value: "300"
             - name: EMBEDDING_API_ENDPOINT
@@ -76,10 +76,10 @@ spec:
           resources:
             requests:
               cpu: "250m"
-              memory: "2Gi"
+              memory: "4Gi"
             limits:
               cpu: "2"
-              memory: "4Gi"
+              memory: "8Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -135,10 +135,10 @@ spec:
           resources:
             requests:
               cpu: "250m"
-              memory: "2Gi"
+              memory: "4Gi"
             limits:
               cpu: "2"
-              memory: "4Gi"
+              memory: "8Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
