@@ -11,9 +11,9 @@
 # retrieval_runner.py가 자동으로 재검색을 스킵합니다.
 
 # ── 결과 공유용 PVC (retrieval 3개 Job이 동시에 마운트 → ReadWriteMany 필수) ─────────
-# ReadWriteOnce(Azure Disk)로 하면 동시 실행되는 Job들이 볼륨 attach를 기다리며 멈춥니다.
-# AKS 기본 제공 azurefile StorageClass(ReadWriteMany 지원) 사용. 클러스터에 없다면
-# `kubectl get storageclass`로 ReadWriteMany 지원 클래스명을 확인해 교체하세요.
+# ReadWriteOnce(Azure Disk 등)로 하면 동시 실행되는 Job들이 볼륨 attach를 기다리며 멈춥니다.
+# nfs.csi.k8s.io 기반 StorageClass(RWX 지원) 사용. 클러스터마다 이름이 다르니
+# `kubectl get storageclass`로 provisioner가 nfs.csi.k8s.io인 이름을 확인해 교체하세요.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -21,7 +21,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: azurefile
+  storageClassName: nfs-1mb-test
   resources:
     requests:
       storage: 5Gi

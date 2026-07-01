@@ -161,8 +161,9 @@ python -m milvus_migration.bench.rerank_runner \
 - `k8s/fetch-results.ps1` — Job 완료를 기다렸다가 결과 JSON/로그를 로컬 `results/`로 자동 복사
   (`./k8s/fetch-results.ps1 -Stage retrieval`, `-Stage rerank`, `-Stage all`)
 
-> retrieval 결과 PVC(`bench-results`)는 3개 Job이 동시에 마운트하므로 `ReadWriteMany`(AKS `azurefile`
-> StorageClass)로 만들어져 있습니다. `ReadWriteOnce`로 바꾸면 동시 실행 시 volume attach 대기로 멈춥니다.
+> retrieval 결과 PVC(`bench-results`)는 3개 Job이 동시에 마운트하므로 `ReadWriteMany`(nfs.csi.k8s.io
+> 기반 StorageClass)로 만들어져 있습니다. `ReadWriteOnce`로 바꾸면 동시 실행 시 volume attach 대기로 멈춥니다.
+> 클러스터마다 StorageClass 이름이 다르니 `k8s/bench-jobs.yaml`의 `storageClassName`을 환경에 맞게 바꾸세요.
 
 ## 파일 구조
 
