@@ -1,0 +1,97 @@
+# 부하테스트 실행용 디버그 Pod — sleep infinity로 띄운 뒤 exec로 들어가서
+# 준비 → 테스트 A → 테스트 B → 리포트 순서로 직접 실행한다.
+# (이미지는 loadtest/** push 시 .github/workflows/build-push-loadtest.yml이 자동으로 빌드/푸시하고
+#  아래 image 태그도 자동 갱신한다 — loadtest/Dockerfile 참고)
+#
+# 실행: kubectl apply -f loadtest/k8s/locust-pod.yaml -n <namespace>
+# 접속: kubectl exec -it locust-loadtest -n <namespace> -- /bin/sh
+#
+#   # 1) 65,000개 chunk 색인 (1회성)
+#   $ python -m milvus_migration.loadtest.seed_collection --data-root /data
+#
+#   # 2) 12,000개 쿼리 임베딩 캐싱 (1회성)
+#   $ python -m milvus_migration.loadtest.cache_query_vectors --data-root /data
+#
+#   # 3) 테스트 A: 기준선 (N값을 바꿔가며 여러 번 — 예시 3개)
+#   $ locust -f milvus_migration/loadtest/locustfile_baseline.py --headless \
+#       -u 1 -r 1 --run-time 3m --interval 10 \
+#       --csv=/results/baseline_N10 --logfile=/results/baseline_N10.log
+#   $ locust -f milvus_migration/loadtest/locustfile_baseline.py --headless \
+#       -u 1 -r 1 --run-time 3m --interval 2 \
+#       --csv=/results/baseline_N2 --logfile=/results/baseline_N2.log
+#
+#   # 4) 테스트 A 결과로 STAGES 값을 확인/조정한 뒤 테스트 B 실행
+#   $ locust -f milvus_migration/loadtest/locustfile_ramp.py --headless \
+#       --logfile=/results/ramp.log --html=/results/ramp.html \
+#       --csv=/results/ramp --request-log=/results/ramp_requests.csv
+#
+#   # 5) 리포트
+#   $ python -m milvus_migration.loadtest.report ramp \
+#       --request-log /results/ramp_requests.csv --logfile /results/ramp.log
+#
+# 결과 확인: kubectl cp <namespace>/locust-loadtest:/results ./results
+# 삭제: kubectl delete pod locust-loadtest -n <namespace>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: locust-loadtest
+  labels:
+    app: locust-loadtest
+spec:
+  restartPolicy: Never
+  containers:
+    - name: locust-loadtest
+      image: ghcr.io/seongwonm/ard-milvus-loadtest:manual  # loadtest/Dockerfile로 수동 빌드/푸시 후 태그 교체
+      imagePullPolicy: Always
+      command: ["sleep", "infinity"]
+      env:
+        - name: MILVUS_URI
+          value: "http://milvus:19530"
+        - name: MILVUS_COLLECTION
+          value: "loadtest_documents"
+        - name: EMBEDDING_MODEL
+          value: "bge-m3"
+        - name: EMBEDDING_BATCH_SIZE
+          value: "512"
+        - name: EMBEDDING_TIMEOUT
+          value: "300"
+        - name: EMBEDDING_API_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: milvus-migration-secret
+              key: EMBEDDING_API_ENDPOINT
+        - name: EMBEDDING_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: milvus-migration-secret
+              key: EMBEDDING_API_KEY
+        - name: MILVUS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: milvus-migration-secret
+              key: MILVUS_TOKEN
+      volumeMounts:
+        - name: loadtest-results
+          mountPath: /results
+      resources:
+        requests:
+          cpu: "1"
+          memory: "2Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+  volumes:
+    - name: loadtest-results
+      persistentVolumeClaim:
+        claimName: loadtest-results
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loadtest-results
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

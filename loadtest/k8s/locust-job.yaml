@@ -1,0 +1,123 @@
+# 부하테스트 전체 파이프라인을 한 번에 실행하는 Job — apply만 하면 Pod가 뜨자마자
+# "색인 → 쿼리 캐싱 → 테스트 A(기준선, N값별 반복) → 테스트 B(동시성 램프) → 리포트"
+# 순서로 전부 자동 실행되고, 끝나면 Job이 Complete 상태가 된다 (k8s/pod.yaml처럼
+# exec로 들어가 손으로 명령을 칠 필요 없음 — 그 방식은 loadtest/k8s/locust-pod.yaml로 남겨둠).
+#
+# 사전 준비: EMBEDDING_API_ENDPOINT/EMBEDDING_API_KEY/MILVUS_TOKEN을 담은
+# Secret(milvus-migration-secret)이 이미 있어야 한다 (k8s/pod.yaml과 동일).
+# 이미지는 loadtest/** push 시 .github/workflows/build-push-loadtest.yml이 자동으로
+# 빌드/푸시하고 아래 image 태그도 자동으로 갱신한다 — 최초 1회는 CI가 돌 때까지 기다린 뒤 apply할 것.
+#
+# 실행: kubectl apply -f loadtest/k8s/locust-job.yaml
+# 진행 확인: kubectl logs -f job/milvus-loadtest
+# 완료 대기: kubectl wait --for=condition=complete job/milvus-loadtest --timeout=7200s
+# 결과 확인: kubectl cp <namespace>/$(kubectl get pod -l job-name=milvus-loadtest -o name | head -1 | cut -d/ -f2):/results ./results
+#   (또는 파드가 아직 안 지워졌다면 kubectl exec로 직접 확인)
+# 재실행(값 조정 후): kubectl delete job milvus-loadtest 한 뒤 다시 apply
+# 삭제: kubectl delete job milvus-loadtest
+#
+# BASELINE_INTERVALS/LOADTEST_STAGE_USERS/LOADTEST_STAGE_DURATION_SEC는 테스트 A
+# 결과(L0)로 Little's Law를 역산해서 다시 조정하는 값 — 이미지 재빌드 없이 아래
+# env만 고치고 재적용하면 된다.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loadtest-results
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: milvus-loadtest
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200  # 무한정 매달리는 것 방지용 안전장치. 기본값 기준 총 소요 ~1~1.5시간
+  # 예상. stage 시간/개수를 늘리면 이 값도 같이 늘릴 것.
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: loadtest
+          image: ghcr.io/seongwonm/ard-milvus-loadtest:manual  # loadtest/Dockerfile로 수동 빌드/푸시 후 태그 교체
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "===== 0) corpus 색인 ====="
+              python -m milvus_migration.loadtest.seed_collection --data-root /data
+
+              echo "===== 0) 쿼리 벡터 캐싱 ====="
+              python -m milvus_migration.loadtest.cache_query_vectors --data-root /data
+
+              BASELINE_STATS=""
+              for N in $BASELINE_INTERVALS; do
+                echo "===== 테스트 A: interval=${N}s ====="
+                locust -f milvus_migration/loadtest/locustfile_baseline.py --headless --only-summary \
+                  -u 1 -r 1 --run-time "$BASELINE_RUNTIME" --interval "$N" \
+                  --csv="/results/baseline_N${N}" --logfile="/results/baseline_N${N}.log"
+                BASELINE_STATS="$BASELINE_STATS /results/baseline_N${N}_stats.csv"
+              done
+
+              echo "===== 테스트 B: 동시성 램프 ====="
+              locust -f milvus_migration/loadtest/locustfile_ramp.py --headless --only-summary \
+                --logfile=/results/ramp.log --html=/results/ramp.html \
+                --csv=/results/ramp --request-log=/results/ramp_requests.csv
+
+              echo "===== 리포트 ====="
+              python -m milvus_migration.loadtest.report baseline --stats $BASELINE_STATS
+              python -m milvus_migration.loadtest.report ramp \
+                --request-log /results/ramp_requests.csv --logfile /results/ramp.log
+          env:
+            - name: MILVUS_URI
+              value: "http://milvus:19530"
+            - name: MILVUS_COLLECTION
+              value: "loadtest_documents"
+            - name: BASELINE_INTERVALS
+              value: "10 5 2 1 0.5 0.2"   # 테스트 A에서 순서대로 돌려볼 N(초) 목록 — 공백 구분
+            - name: BASELINE_RUNTIME
+              value: "3m"                 # 테스트 A 한 번(N값 하나)당 실행 시간
+            - name: LOADTEST_STAGE_USERS
+              value: "1,2,5,10,20,50,100,200,500"  # 테스트 B 동시 사용자 단계 — 콤마 구분
+            - name: LOADTEST_STAGE_DURATION_SEC
+              value: "240"                # 테스트 B 각 stage 유지 시간(초)
+            - name: EMBEDDING_MODEL
+              value: "bge-m3"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "512"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: MILVUS_TOKEN
+          volumeMounts:
+            - name: loadtest-results
+              mountPath: /results
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: loadtest-results
+          persistentVolumeClaim:
+            claimName: loadtest-results

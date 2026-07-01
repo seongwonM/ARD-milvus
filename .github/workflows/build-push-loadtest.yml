@@ -1,0 +1,48 @@
+name: Build and Push milvus-migration-loadtest
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "loadtest/**"
+      - ".github/workflows/build-push-loadtest.yml"
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/seongwonm/ard-milvus-loadtest
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: loadtest/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+
+      - name: Update image tags
+        run: |
+          sed -i "s|${{ env.IMAGE }}:.*|${{ env.IMAGE }}:${{ github.sha }}|" loadtest/k8s/locust-job.yaml
+          sed -i "s|${{ env.IMAGE }}:.*|${{ env.IMAGE }}:${{ github.sha }}|" loadtest/k8s/locust-pod.yaml
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add loadtest/k8s/locust-job.yaml loadtest/k8s/locust-pod.yaml
+          git commit -m "ci: update loadtest image tag to ${{ github.sha }}"
+          git push

@@ -9,3 +9,5 @@ dist/
 build/
 .venv/
 venv/
+loadtest/cache/
+results/loadtest/
