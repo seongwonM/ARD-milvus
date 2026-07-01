@@ -44,7 +44,7 @@ spec:
             - name: EMBEDDING_DIM
               value: "1024"
             - name: EMBEDDING_BATCH_SIZE
-              value: "2048"
+              value: "512"
             - name: EMBEDDING_TIMEOUT
               value: "300"
             - name: EMBEDDING_API_ENDPOINT

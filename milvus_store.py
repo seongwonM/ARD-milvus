@@ -153,7 +153,7 @@ class MilvusStore:
         """ANN 검색. 반환: [[("doc_id", score), ...], ...]"""
         return [
             [(doc_id, score) for doc_id, score, _ in hits]
-            for hits in self._search_raw(name, vectors, top_k, vector_mode)
+            for hits in self._search_raw(name, vectors, top_k, vector_mode, with_text=False)
         ]
 
     def search_with_text(
@@ -167,7 +167,7 @@ class MilvusStore:
 
         반환: [[("doc_id", score, "text"), ...], ...]
         """
-        return self._search_raw(name, vectors, top_k, vector_mode)
+        return self._search_raw(name, vectors, top_k, vector_mode, with_text=True)
 
     def _search_raw(
         self,
@@ -175,8 +175,11 @@ class MilvusStore:
         vectors,
         top_k: int,
         vector_mode: str,
+        with_text: bool = False,
     ) -> list[list[tuple[str, float, str]]]:
-        CHUNK = 256
+        # 256 쿼리 × 100 결과 × text(2KB) ≈ 51MB → gRPC 64MB 초과 방지
+        CHUNK = 128
+        output_fields = ["doc_id", "text"] if with_text else ["doc_id"]
         all_results: list[list[tuple[str, float, str]]] = []
 
         for start in range(0, len(vectors), CHUNK):
@@ -193,7 +196,7 @@ class MilvusStore:
                     anns_field="vector",
                     search_params={"metric_type": "IP", "params": {}},
                     limit=top_k,
-                    output_fields=["doc_id", "text"],
+                    output_fields=output_fields,
                 )
             else:
                 query_data = [vectors[i].tolist() for i in range(start, end)]
@@ -203,7 +206,7 @@ class MilvusStore:
                     anns_field="vector",
                     search_params={"metric_type": "COSINE", "params": {"ef": 100}},
                     limit=top_k,
-                    output_fields=["doc_id", "text"],
+                    output_fields=output_fields,
                 )
 
             for hits in results:

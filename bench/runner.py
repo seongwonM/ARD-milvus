@@ -107,6 +107,7 @@ def run_bench(
     print(f"  검색 (top-{fetch_n})...", flush=True)
     t0 = time.time()
 
+    colbert_rerank_used = False
     if with_colbert_rerank:
         candidates_per_q = store.search_with_text(collection, q_embs, top_k=fetch_n, vector_mode=vector_mode)
         search_sec = round(time.time() - t0, 2)
@@ -131,6 +132,7 @@ def run_bench(
                 raw_results.append(reranked)
                 offset += n
             colbert_sec = round(time.time() - t_cb, 2)
+            colbert_rerank_used = True
             print(f"  ColBERT 리랭킹: {colbert_sec}s", flush=True)
         except ColBERTUnsupported as exc:
             colbert_sec = None
@@ -191,7 +193,7 @@ def run_bench(
         "query_encode_qps":    query_encode_qps,
         "search_sec":          search_sec,
         "search_qps":          search_qps,
-        "colbert_rerank":      with_colbert_rerank,
+        "colbert_rerank":      colbert_rerank_used,
         "colbert_sec":         colbert_sec,
         "concurrent":          concurrent_results,
         **metrics,
