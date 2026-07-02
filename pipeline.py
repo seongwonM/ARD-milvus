@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import numpy as np
+
 from .config import Config, EmbeddingConfig
 from .embedding import EmbeddingClient
 from .milvus_store import MilvusStore
@@ -97,6 +99,37 @@ class Pipeline:
         total = self._store.upload(name, _data_iter())
         self._store.finalize(name)
         logger.info(f"인덱싱 완료: {total:,}건 → '{name}'")
+
+    def index_vectors(
+        self,
+        doc_ids: list[str],
+        texts: list[str],
+        vectors: np.ndarray,
+        *,
+        collection: str | None = None,
+        recreate: bool = False,
+    ) -> None:
+        """이미 계산된 벡터를 그대로 Milvus에 삽입 (Embedding API 재호출 없음).
+
+        milvus/minio를 재배포할 때마다 동일한 corpus를 다시 임베딩하는 비용을
+        피하기 위한 경로 — 벡터는 호출자가 미리 캐싱해둔 걸 그대로 전달한다.
+        """
+        name = collection or self._cfg.milvus.collection
+
+        if recreate and self._store.has_collection(name):
+            logger.info(f"기존 컬렉션 삭제: {name}")
+            self._store.drop_collection(name)
+
+        if not self._store.has_collection(name):
+            self._store.create_collection(name, dim=vectors.shape[1])
+
+        def _data_iter():
+            for pid, (doc_id, text, vec) in enumerate(zip(doc_ids, texts, vectors)):
+                yield pid, doc_id, text, vec
+
+        total = self._store.upload(name, _data_iter())
+        self._store.finalize(name)
+        logger.info(f"인덱싱 완료(캐시된 벡터): {total:,}건 → '{name}'")
 
     # ── 검색 ─────────────────────────────────────────────────────────────────
 

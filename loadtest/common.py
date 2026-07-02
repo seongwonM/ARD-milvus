@@ -38,6 +38,24 @@ def load_query_cache(cache_dir: str | Path = DEFAULT_CACHE_DIR) -> tuple[list[st
     return ids, vecs
 
 
+def load_chunk_cache(cache_dir: str | Path = DEFAULT_CACHE_DIR) -> tuple[list[str], np.ndarray]:
+    """cache_chunk_vectors.py가 저장한 corpus id/벡터를 읽어온다."""
+    d = Path(cache_dir)
+    ids_path = d / "chunk_ids.json"
+    vecs_path = d / "chunk_vectors.npy"
+    if not ids_path.exists() or not vecs_path.exists():
+        raise FileNotFoundError(
+            f"corpus 임베딩 캐시가 없습니다: {ids_path}, {vecs_path}\n"
+            f"먼저 'python -m milvus_migration.loadtest.cache_chunk_vectors'를 실행하세요."
+        )
+    ids = json.loads(ids_path.read_text(encoding="utf-8"))
+    vecs = np.load(vecs_path)
+    if len(ids) != len(vecs):
+        raise ValueError(f"corpus id({len(ids)})와 벡터({len(vecs)}) 개수가 다릅니다.")
+    logger.info(f"[corpus 캐시] {len(ids):,}개 로드 (dim={vecs.shape[1]})")
+    return ids, vecs
+
+
 class QueryCursor:
     """N개의 쿼리 인덱스를 순서대로 순환 순회하는 공유 커서.
 
