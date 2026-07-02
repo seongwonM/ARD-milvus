@@ -95,8 +95,15 @@ def run_rerank(
     latencies: list[float] = []
 
     t0 = time.time()
-    for qid, q_text in queries.items():
-        cand_ids = candidates.get(qid, [])[:top_n]
+    for qid, cand_ids_full in candidates.items():
+        q_text = queries.get(qid)
+        if q_text is None:
+            logger.warning(
+                f"  [스킵] qid={qid} 가 현재 queries_all.parquet에 없음 "
+                f"(retrieval 시점과 data_root 불일치 가능)"
+            )
+            continue
+        cand_ids = cand_ids_full[:top_n]
         if not cand_ids:
             continue
         cand_texts = [_doc_text(docs, d) for d in cand_ids]
