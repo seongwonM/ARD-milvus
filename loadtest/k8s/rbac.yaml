@@ -1,7 +1,7 @@
-# milvus-loadtest Job이 자기 자신의 milvus/minio를 스스로 배포·정리(리소스 초기화)할 수
-# 있게 하는 권한. 이 네임스페이스 안에서만 동작하는 Role로 제한했다(클러스터 전체 권한 아님).
-# 실제 사용처: loadtest/entrypoint.sh가 kubectl apply/delete -f loadtest/k8s/milvus.yaml,minio.yaml 실행
-# (bench용 k8s/milvus.yaml,minio.yaml과는 별개 — 리소스 이름에 -loadtest를 붙여 충돌 방지).
+# milvus-loadtest Job이 자기 자신의 milvus/minio/starrocks를 스스로 배포·정리(리소스 초기화)할
+# 수 있게 하는 권한. 이 네임스페이스 안에서만 동작하는 Role로 제한했다(클러스터 전체 권한 아님).
+# 실제 사용처: loadtest/entrypoint.sh가 kubectl apply/delete -f loadtest/k8s/{milvus,minio,starrocks}.yaml 실행
+# (bench용 k8s/{milvus,minio,starrocks}.yaml과는 별개 — 리소스 이름에 -loadtest를 붙여 충돌 방지).
 #
 # 실행(최초 1회): kubectl apply -f loadtest/k8s/rbac.yaml -n <namespace>
 apiVersion: v1

@@ -49,6 +49,7 @@ from locust import LoadTestShape, User, constant, events, task
 
 from milvus_migration.config import Config
 from milvus_migration.loadtest.common import QueryCursor, build_store, load_query_cache
+from milvus_migration.store_factory import collection_name
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ def _add_args(parser) -> None:
 
 _cfg = Config.from_env()
 _store = build_store(_cfg)
+_collection = collection_name(_cfg)
 _query_ids, _query_vecs = load_query_cache()
 _cursor = QueryCursor(len(_query_ids))
 
@@ -141,11 +143,11 @@ class MilvusLoadUser(User):
         start = time.perf_counter()
         exc = None
         try:
-            _store.search_one(_cfg.milvus.collection, vec, top_k=10)
+            _store.search_one(_collection, vec, top_k=10)
         except Exception as e:
             exc = e
         events.request.fire(
-            request_type="milvus",
+            request_type=_cfg.backend,
             name=f"search/stage{stage_idx}_u{target_users}",
             response_time=(time.perf_counter() - start) * 1000,
             response_length=0,

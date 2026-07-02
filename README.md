@@ -27,8 +27,17 @@ cp .env.example .env
 | `MILVUS_URI` | - | `http://localhost:19530` | Milvus 서버 주소 |
 | `MILVUS_TOKEN` | - | `""` | Milvus 인증 토큰 |
 | `MILVUS_COLLECTION` | - | `documents` | 기본 컬렉션 이름 |
+| `VECTOR_BACKEND` | - | `milvus` | 벡터 백엔드 선택 (`milvus` \| `starrocks`) |
+| `STARROCKS_HOST` | `starrocks` 사용 시 | `localhost` | StarRocks FE 주소 (MySQL 프로토콜) |
+| `STARROCKS_PORT` | - | `9030` | StarRocks FE 쿼리 포트 |
+| `STARROCKS_USER` / `STARROCKS_PASSWORD` | - | `root` / `""` | StarRocks 접속 계정 |
+| `STARROCKS_DATABASE` | - | `milvus_migration` | StarRocks 데이터베이스 이름 |
 
 임베딩 차원(dim)은 설정하지 않아도 됩니다 — 첫 API 응답으로 자동 감지합니다.
+
+`VECTOR_BACKEND=starrocks`로 설정하면 `Pipeline`/`retrieval_runner`/`loadtest`가 모두
+Milvus 대신 StarRocks(벡터 인덱스 HNSW, `starrocks_store.py`)를 사용합니다 — 코드/CLI
+사용법은 완전히 동일하고 백엔드만 바뀝니다.
 
 ## 사용법
 
@@ -188,6 +197,12 @@ python -m milvus_migration.bench.rerank_runner \
   PVC에 그대로 남아있지만 읽어올 살아있는 pod가 따로 필요함).
 - `k8s/fetch-results.ps1` — 위 디버그 pod을 자동으로 띄우고, Job 완료를 기다렸다가 결과 JSON/로그를
   로컬 `results/`로 자동 복사 (`./k8s/fetch-results.ps1 -Stage retrieval`, `-Stage rerank`, `-Stage all`)
+- `k8s/starrocks.yaml` — StarRocks(allin1: FE+BE 단일 컨테이너, 벡터 인덱스 HNSW) standalone + PVC.
+  `k8s/milvus.yaml`과 동일한 리소스 requests/limits로 맞춰 공정하게 비교되도록 함.
+- `k8s/bench-jobs-starrocks.yaml` — `bench-jobs.yaml`과 동일한 retrieval 3모델 벤치마크를
+  StarRocks로 돌리는 Job (`VECTOR_BACKEND=starrocks`). 결과는 `/results/retrieval-starrocks`에
+  저장되어 Milvus 결과(`/results/retrieval`)와 섞이지 않습니다. `k8s/starrocks.yaml`을
+  먼저 적용/Ready 대기한 뒤 적용하세요.
 
 > retrieval 결과 PVC(`bench-results`)는 3개 Job이 동시에 마운트하므로 `ReadWriteMany`(nfs.csi.k8s.io
 > 기반 StorageClass)로 만들어져 있습니다. `ReadWriteOnce`로 바꾸면 동시 실행 시 volume attach 대기로 멈춥니다.
@@ -197,11 +212,14 @@ python -m milvus_migration.bench.rerank_runner \
 
 ```
 milvus_migration/
-├── config.py             # 환경변수 설정
-├── embedding.py          # Cloud Platform Embedding API 클라이언트
-├── milvus_store.py       # Milvus CRUD
-├── pipeline.py           # 인덱싱 + 검색 파이프라인
-├── main.py                # CLI 진입점
+├── config.py               # 환경변수 설정
+├── embedding.py            # Cloud Platform Embedding API 클라이언트
+├── milvus_store.py         # Milvus CRUD
+├── starrocks_store.py      # StarRocks CRUD (벡터 인덱스 HNSW) — MilvusStore와 동일 인터페이스
+├── vector_store_common.py  # 두 store가 공유하는 상수/유틸 (텍스트 truncate 등)
+├── store_factory.py        # VECTOR_BACKEND로 MilvusStore/StarRocksStore 선택
+├── pipeline.py             # 인덱싱 + 검색 파이프라인 (백엔드 무관)
+├── main.py                 # CLI 진입점
 ├── bench/
 │   ├── data_loader.py     # parquet 데이터 로더
 │   ├── evaluator.py       # NDCG / MRR / Recall / MAP
@@ -211,7 +229,9 @@ milvus_migration/
 ├── k8s/
 │   ├── milvus.yaml        # Milvus standalone
 │   ├── minio.yaml         # MinIO (Milvus blob storage 백엔드)
-│   ├── bench-jobs.yaml    # retrieval Job × 3 + PVC(ReadWriteMany)
+│   ├── starrocks.yaml     # StarRocks standalone (allin1, 벡터 인덱스)
+│   ├── bench-jobs.yaml    # retrieval Job × 3 + PVC(ReadWriteMany) — Milvus
+│   ├── bench-jobs-starrocks.yaml  # 동일 retrieval Job × 3 — StarRocks
 │   ├── rerank-job.yaml    # reranking Job
 │   ├── pod.yaml           # 디버그용 Pod
 │   └── fetch-results.ps1  # 결과 로컬 자동 복사 스크립트

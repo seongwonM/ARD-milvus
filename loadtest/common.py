@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from ..config import Config
-from ..milvus_store import MilvusStore
+from ..store_factory import build_store as _build_store
 
 logger = logging.getLogger(__name__)
 
@@ -76,5 +76,6 @@ class QueryCursor:
         return i
 
 
-def build_store(cfg: Config) -> MilvusStore:
-    return MilvusStore(cfg.milvus.uri, cfg.milvus.token)
+def build_store(cfg: Config):
+    """VECTOR_BACKEND(milvus|starrocks)에 따라 알맞은 store를 만든다 (store_factory.py)."""
+    return _build_store(cfg)

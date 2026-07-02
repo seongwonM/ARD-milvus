@@ -22,6 +22,7 @@ import numpy as np
 from .config import Config, EmbeddingConfig
 from .embedding import EmbeddingClient
 from .milvus_store import MilvusStore
+from .store_factory import collection_name as _default_collection_name
 
 _CHUNK = 2_000
 
@@ -30,9 +31,14 @@ logger = logging.getLogger(__name__)
 
 class Pipeline:
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, store: object | None = None) -> None:
+        """store를 넘기지 않으면 기본값인 MilvusStore를 생성한다.
+
+        StarRocks 등 다른 백엔드를 쓰려면 store_factory.build_store(config)로
+        만든 인스턴스를 넘긴다 (MilvusStore와 동일한 인터페이스면 무엇이든 가능).
+        """
         self._cfg = config
-        self._store = MilvusStore(config.milvus.uri, config.milvus.token)
+        self._store = store if store is not None else MilvusStore(config.milvus.uri, config.milvus.token)
         self._emb = EmbeddingClient(config.embedding)
 
     @classmethod
@@ -68,7 +74,7 @@ class Pipeline:
 
         docs 형식: [{"id": "doc-1", "text": "내용"}, ...]
         """
-        name = collection or self._cfg.milvus.collection
+        name = collection or _default_collection_name(self._cfg)
         bs   = batch_size or self._cfg.embedding.batch_size
 
         if recreate and self._store.has_collection(name):
@@ -114,7 +120,7 @@ class Pipeline:
         milvus/minio를 재배포할 때마다 동일한 corpus를 다시 임베딩하는 비용을
         피하기 위한 경로 — 벡터는 호출자가 미리 캐싱해둔 걸 그대로 전달한다.
         """
-        name = collection or self._cfg.milvus.collection
+        name = collection or _default_collection_name(self._cfg)
 
         if recreate and self._store.has_collection(name):
             logger.info(f"기존 컬렉션 삭제: {name}")
@@ -145,7 +151,7 @@ class Pipeline:
         단일 쿼리(str) → [(doc_id, score), ...]
         복수 쿼리(list) → [[(doc_id, score), ...], ...]
         """
-        name      = collection or self._cfg.milvus.collection
+        name      = collection or _default_collection_name(self._cfg)
         is_single = isinstance(query, str)
         texts     = [query] if is_single else query
 
@@ -157,7 +163,7 @@ class Pipeline:
     # ── 유틸 ─────────────────────────────────────────────────────────────────
 
     def collection_size(self, collection: str | None = None) -> int:
-        return self._store.collection_size(collection or self._cfg.milvus.collection)
+        return self._store.collection_size(collection or _default_collection_name(self._cfg))
 
     def drop_collection(self, collection: str | None = None) -> None:
-        self._store.drop_collection(collection or self._cfg.milvus.collection)
+        self._store.drop_collection(collection or _default_collection_name(self._cfg))

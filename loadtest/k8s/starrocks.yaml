@@ -1,0 +1,73 @@
+# loadtest 전용 StarRocks manifest — milvus-loadtest/minio-loadtest와 나란히 놓고
+# 동일한 baseline/ramp 테스트를 돌려 속도를 비교하기 위한 것.
+#
+# starrocks/allin1-ubuntu: FE+BE가 한 컨테이너에 다 들어있는 이미지 — Milvus의
+# 단일 Pod 구성과 그림을 맞추기 위해 이걸 골랐다 (실제 운영 클러스터는 보통 FE/BE를
+# 분리하지만, 이건 순수 비교용 최소 구성).
+#
+# 리소스 requests/limits를 loadtest/k8s/milvus.yaml과 동일하게 맞춰서 두 백엔드가
+# 같은 자원으로 공정하게 비교되도록 했다.
+#
+# 벡터 인덱스(HNSW)는 StarRocks 3.4+에서만 지원 — 3.5.19(안정 버전) 사용.
+# FE의 enable_experimental_vector 설정은 starrocks_store.py가 접속 시 자동으로 켠다.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: starrocks-loadtest-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: starrocks-loadtest
+  labels:
+    app: starrocks-loadtest
+spec:
+  containers:
+    - name: starrocks
+      image: starrocks/allin1-ubuntu:3.5.19
+      ports:
+        - containerPort: 9030  # MySQL 프로토콜(FE 쿼리 포트) — starrocks_store.py가 여기로 접속
+        - containerPort: 8030  # FE http
+      volumeMounts:
+        - name: starrocks-data
+          mountPath: /data/deploy/starrocks
+      resources:
+        requests:
+          cpu: "1"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+      readinessProbe:
+        # allin1 이미지는 FE 메타데이터 초기화 + BE 등록까지 컨테이너 시작 후 수십 초
+        # 걸릴 수 있어서, 쿼리 포트(9030)가 실제로 리스닝하는지로 Ready 여부를 판단한다.
+        tcpSocket:
+          port: 9030
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 30
+  volumes:
+    - name: starrocks-data
+      persistentVolumeClaim:
+        claimName: starrocks-loadtest-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: starrocks-loadtest
+spec:
+  selector:
+    app: starrocks-loadtest
+  ports:
+    - name: query
+      port: 9030
+      targetPort: 9030
+    - name: http
+      port: 8030
+      targetPort: 8030

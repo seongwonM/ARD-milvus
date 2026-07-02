@@ -1,0 +1,72 @@
+# bench 전용 StarRocks manifest — k8s/milvus.yaml과 나란히 놓고 k8s/bench-jobs-starrocks.yaml로
+# 동일한 retrieval(NDCG) 벤치마크를 돌려 백엔드 간 검색 품질/속도를 비교하기 위한 것.
+#
+# starrocks/allin1-ubuntu: FE+BE가 한 컨테이너에 다 들어있는 이미지 — Milvus의 단일
+# Pod 구성과 그림을 맞추기 위해 이걸 골랐다 (순수 비교용 최소 구성).
+#
+# 리소스 requests/limits를 k8s/milvus.yaml과 동일하게 맞춰서 공정하게 비교되도록 했다.
+#
+# 벡터 인덱스(HNSW)는 StarRocks 3.4+에서만 지원 — 3.5.19(안정 버전) 사용.
+# FE의 enable_experimental_vector 설정은 starrocks_store.py가 접속 시 자동으로 켠다.
+#
+# 실행: kubectl apply -f k8s/starrocks.yaml
+# 삭제: kubectl delete -f k8s/starrocks.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: starrocks-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: starrocks
+  labels:
+    app: starrocks
+spec:
+  containers:
+    - name: starrocks
+      image: starrocks/allin1-ubuntu:3.5.19
+      ports:
+        - containerPort: 9030  # MySQL 프로토콜(FE 쿼리 포트) — starrocks_store.py가 여기로 접속
+        - containerPort: 8030  # FE http
+      volumeMounts:
+        - name: starrocks-data
+          mountPath: /data/deploy/starrocks
+      resources:
+        requests:
+          cpu: "1"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+      readinessProbe:
+        tcpSocket:
+          port: 9030
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 30
+  volumes:
+    - name: starrocks-data
+      persistentVolumeClaim:
+        claimName: starrocks-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: starrocks
+spec:
+  selector:
+    app: starrocks
+  ports:
+    - name: query
+      port: 9030
+      targetPort: 9030
+    - name: http
+      port: 8030
+      targetPort: 8030

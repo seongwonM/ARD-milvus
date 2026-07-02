@@ -13,6 +13,18 @@ class MilvusConfig:
 
 
 @dataclass
+class StarRocksConfig:
+    """StarRocks는 MySQL 프로토콜(기본 포트 9030)로 접속 — pymysql 사용."""
+    host: str       = field(default_factory=lambda: os.environ.get("STARROCKS_HOST", "localhost"))
+    port: int       = field(default_factory=lambda: int(os.environ.get("STARROCKS_PORT", "9030")))
+    user: str       = field(default_factory=lambda: os.environ.get("STARROCKS_USER", "root"))
+    password: str   = field(default_factory=lambda: os.environ.get("STARROCKS_PASSWORD", ""))
+    database: str   = field(default_factory=lambda: os.environ.get("STARROCKS_DATABASE", "milvus_migration"))
+    # MilvusConfig.collection과 동일한 역할(테이블/컬렉션 이름) — 백엔드 전환 시 이 값만 다르면 됨.
+    collection: str = field(default_factory=lambda: os.environ.get("MILVUS_COLLECTION", "documents"))
+
+
+@dataclass
 class EmbeddingConfig:
     endpoint: str   = field(default_factory=lambda: os.environ["EMBEDDING_API_ENDPOINT"])
     # rerank API는 embedding과 헤더/인증은 같지만 경로가 다름 (.../embeddings 대신 .../rerank).
@@ -28,12 +40,16 @@ class EmbeddingConfig:
 
 @dataclass
 class Config:
-    milvus: MilvusConfig       = field(default_factory=MilvusConfig)
-    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    milvus: MilvusConfig         = field(default_factory=MilvusConfig)
+    starrocks: StarRocksConfig   = field(default_factory=StarRocksConfig)
+    embedding: EmbeddingConfig   = field(default_factory=EmbeddingConfig)
+    # 벡터 백엔드 선택 — "milvus"(기본) | "starrocks". store_factory.build_store()가 이 값을 본다.
+    backend: str = field(default_factory=lambda: os.environ.get("VECTOR_BACKEND", "milvus"))
 
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
             milvus=MilvusConfig(),
+            starrocks=StarRocksConfig(),
             embedding=EmbeddingConfig(),
         )

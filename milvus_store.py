@@ -13,16 +13,12 @@ import time
 
 import numpy as np
 
+# StarRocksStore와 공유(백엔드 비교 벤치마크의 공정성을 위해 값을 하나로 통일) —
+# 기존 코드가 `from .milvus_store import _trunc, _TEXT_MAX_BYTES, _SEARCH_CHUNK`로
+# 가져다 쓰던 것도 그대로 동작하도록 여기서 재노출한다.
+from .vector_store_common import _SEARCH_CHUNK, _TEXT_MAX_BYTES, _trunc
+
 _INSERT_BATCH = 64
-_TEXT_MAX_BYTES = 2000  # VARCHAR max_length은 바이트 기준 — 여유분 확보
-_SEARCH_CHUNK = 128  # 256 쿼리 × 100 결과 ≈ gRPC 메시지 크기 초과 방지
-
-
-def _trunc(text: str) -> str:
-    b = text.encode("utf-8")
-    if len(b) <= _TEXT_MAX_BYTES:
-        return text
-    return b[:_TEXT_MAX_BYTES].decode("utf-8", errors="ignore")
 
 logger = logging.getLogger(__name__)
 

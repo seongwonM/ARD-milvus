@@ -33,7 +33,8 @@ from milvus_migration.bench.data_loader import load_from_dir
 from milvus_migration.bench.evaluator import evaluate
 from milvus_migration.config import Config
 from milvus_migration.embedding import EmbeddingClient
-from milvus_migration.milvus_store import MilvusStore, _trunc, _TEXT_MAX_BYTES, _SEARCH_CHUNK
+from milvus_migration.store_factory import build_store
+from milvus_migration.vector_store_common import _trunc, _TEXT_MAX_BYTES, _SEARCH_CHUNK
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def _insert_batch_size(dim: int) -> int:
 
 
 def _build_index(
-    store: MilvusStore,
+    store,
     client: EmbeddingClient,
     collection: str,
     docs: dict,
@@ -152,7 +153,7 @@ def run_retrieval(
     force_reindex: bool = False,
 ) -> dict:
     client = EmbeddingClient(cfg.embedding)
-    store = MilvusStore(cfg.milvus.uri, cfg.milvus.token)
+    store = build_store(cfg)
 
     model_id = cfg.embedding.model
     collection = _safe_name(model_id)
@@ -304,7 +305,8 @@ def main() -> None:
         logger.info(f"[스킵] 이미 결과 존재: {out_path} (재실행하려면 --force 또는 --reindex)")
         return
 
-    logger.info(f"모델={cfg.embedding.model}  Milvus={cfg.milvus.uri}  data_root={args.data_root}  reindex={args.reindex}")
+    target = cfg.milvus.uri if cfg.backend == "milvus" else f"{cfg.starrocks.host}:{cfg.starrocks.port}"
+    logger.info(f"모델={cfg.embedding.model}  backend={cfg.backend}({target})  data_root={args.data_root}  reindex={args.reindex}")
     docs, queries, qrels = load_from_dir(args.data_root)
 
     result = run_retrieval(cfg, docs, queries, qrels, out_path, force_reindex=args.reindex)

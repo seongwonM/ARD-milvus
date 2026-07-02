@@ -10,12 +10,15 @@
 # 사용법:
 #   ./loadtest/k8s/fetch-results.sh <namespace> [출력디렉토리] [timeout]
 #   ./loadtest/k8s/fetch-results.sh milvus-loadtest
-#   ./loadtest/k8s/fetch-results.sh milvus-loadtest results-loadtest 7200s
+#   ./loadtest/k8s/fetch-results.sh milvus-loadtest results-loadtest 21600s
+#
+# 기본 timeout(21600s=6h)은 BACKENDS(기본 milvus+starrocks 둘 다) 순회 기준 —
+# locust-job.yaml의 activeDeadlineSeconds와 맞춰뒀다. 백엔드 하나만 돌린다면 줄여도 됨.
 set -euo pipefail
 
 NAMESPACE="${1:?namespace를 첫 번째 인자로 넘겨주세요 (예: ./loadtest/k8s/fetch-results.sh milvus-loadtest)}"
 OUT_DIR="${2:-results-loadtest}"
-TIMEOUT="${3:-7200s}"
+TIMEOUT="${3:-21600s}"
 JOB_NAME="milvus-loadtest"
 DEBUG_POD="locust-loadtest"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
