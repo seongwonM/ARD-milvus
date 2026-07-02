@@ -62,7 +62,9 @@ if ($Stage -eq "retrieval" -or $Stage -eq "all") {
 }
 
 if ($Stage -eq "rerank" -or $Stage -eq "all") {
-    foreach ($job in @("bench-rerank-bge", "bench-rerank-qwen3")) {
+    $topNs = @(5, 10, 20, 50, 100)
+    $rerankJobs = @("bge", "qwen3") | ForEach-Object { $r = $_; $topNs | ForEach-Object { "bench-rerank-$r-top$_" } }
+    foreach ($job in $rerankJobs) {
         Wait-AndFetch -JobName $job -RemotePath "/results/rerank" -LocalPath "$OutDir\rerank"
     }
 }
