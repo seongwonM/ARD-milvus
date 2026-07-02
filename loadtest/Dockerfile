@@ -12,6 +12,13 @@
 #   docker push <registry>/ard-milvus-loadtest:manual
 FROM python:3.12-slim
 
+# entrypoint.sh가 자기 자신의 milvus/minio를 apply/delete하는 데 필요 (loadtest/k8s/rbac.yaml로 권한 부여)
+ARG KUBECTL_VERSION=v1.31.0
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+    && chmod +x /usr/local/bin/kubectl \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt ./requirements.txt

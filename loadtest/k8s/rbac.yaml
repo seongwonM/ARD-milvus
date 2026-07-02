@@ -1,0 +1,33 @@
+# milvus-loadtest Job이 자기 자신의 milvus/minio를 스스로 배포·정리(리소스 초기화)할 수
+# 있게 하는 권한. 이 네임스페이스 안에서만 동작하는 Role로 제한했다(클러스터 전체 권한 아님).
+# 실제 사용처: loadtest/entrypoint.sh가 kubectl apply/delete -f k8s/milvus.yaml,minio.yaml 실행.
+#
+# 실행(최초 1회): kubectl apply -f loadtest/k8s/rbac.yaml -n <namespace>
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loadtest-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: loadtest-runner
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "persistentvolumeclaims", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: loadtest-runner
+subjects:
+  - kind: ServiceAccount
+    name: loadtest-runner
+roleRef:
+  kind: Role
+  name: loadtest-runner
+  apiGroup: rbac.authorization.k8s.io
