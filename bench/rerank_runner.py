@@ -93,9 +93,14 @@ def run_rerank(
 ) -> dict:
     run: dict[str, dict[str, float]] = {}
     latencies: list[float] = []
+    cand_counts: list[int] = []
+    _LOG_SAMPLE = 5
+
+    total = len(candidates)
+    log_every = max(1, total // 10)
 
     t0 = time.time()
-    for qid, cand_ids_full in candidates.items():
+    for i, (qid, cand_ids_full) in enumerate(candidates.items(), start=1):
         q_text = queries.get(qid)
         if q_text is None:
             logger.warning(
@@ -107,10 +112,22 @@ def run_rerank(
         if not cand_ids:
             continue
         cand_texts = [_doc_text(docs, d) for d in cand_ids]
+        cand_counts.append(len(cand_ids))
+        if len(cand_counts) <= _LOG_SAMPLE:
+            logger.info(f"  [샘플 {len(cand_counts)}/{_LOG_SAMPLE}] [{qid}] rerank API로 보내는 청크 수={len(cand_ids)}")
 
         t_q = time.time()
         run[qid] = score_fn(q_text, cand_ids, cand_texts)
         latencies.append(time.time() - t_q)
+
+        if i % log_every == 0 or i == total:
+            logger.info(f"  진행: {i:,}/{total:,} ({round(100*i/total)}%)")
+
+    if cand_counts:
+        logger.info(
+            f"  쿼리당 청크 수: min={min(cand_counts)}  max={max(cand_counts)}  "
+            f"avg={round(sum(cand_counts) / len(cand_counts), 1)}  (top_n={top_n} 상한)"
+        )
 
     elapsed = round(time.time() - t0, 2)
     n = len(run)
