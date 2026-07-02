@@ -22,6 +22,17 @@
 # API만 호출하는 가벼운 워크로드라 pod당 request 512Mi/limit 1.5Gi로 충분함.
 # 10개 Job(pod) 동시 적용 기준 합계 = request 5Gi / limit 15Gi, cpu request 2 / limit 10 —
 # 가용 자원(CPU 20 / RAM 33Gi) 안에 여유 있게 들어와서 굳이 순차로 나눠 띄울 필요 없음.
+#
+# STARTUP_DELAY_SEC: 10개 pod가 전부 동시에 같은 API(엔드포인트 공유)를 두들기면 지연이
+# 심해져서, Job마다 15초씩 엇갈리게(0/15/30/.../135초) 시작 전 대기하도록 함
+# (rerank_runner.py가 이 대기를 "총 소요시간" 집계 전에 처리 — elapsed/qps에는 안 들어감).
+#
+# REQUEST_INTERVAL_SEC: 시작만 엇갈려도 각 pod 내부에서 쿼리를 연달아 쏘면 결국 API에
+# 몰리므로, 쿼리 호출 사이마다 0.5s씩 추가로 대기. 이 시간도 elapsed/qps 집계에서 제외됨
+# (bench/rerank_runner.py의 run_rerank가 재시도 실패 시간과 함께 별도로 빼고 기록).
+#
+# 재시도: reranker.py/embedding.py 둘 다 실패 시 무한 재시도(백오프 상한 30s) — 쿼리를
+# 버릴 수 없어서 3회 만에 포기하지 않고 성공할 때까지 계속 시도함.
 
 # ── 1. Reranker: bge-reranker-v2-m3 (전용 rerank API) ────────────────────────
 apiVersion: batch/v1
@@ -50,6 +61,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "0"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -105,6 +120,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "15"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -160,6 +179,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "30"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -215,6 +238,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "45"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -270,6 +297,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "60"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -326,6 +357,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "75"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -381,6 +416,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "90"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -436,6 +475,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "105"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -491,6 +534,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "120"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -546,6 +593,10 @@ spec:
                 --data-root /data \
                 --out /results/rerank
           env:
+            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
+              value: "135"
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0.5"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT

@@ -40,6 +40,10 @@ class RerankClient:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {config.api_key}",
         })
+        # 재시도 통계 (rerank_runner.py가 실행 구간별로 스냅샷 차이를 내서 리포트)
+        self.retry_count = 0          # 실패한 시도 총 횟수(성공 전 재시도만, 최종 실패 포함)
+        self.retry_success_at: list[int] = []  # 재시도 끝에 성공했을 때 몇 번째 시도였는지(1-base)
+        self.failed_time_sec = 0.0    # 실패 시도 자체 + 백오프 sleep에 쓴 시간 누적 (성공 시간과 분리)
 
     def rerank(
         self, model: str, query: str, documents: list[str], top_n: int,
@@ -49,18 +53,23 @@ class RerankClient:
         반환: [(원본 documents 내 index, relevance_score), ...] (score 내림차순, API 응답 순서 그대로)
         """
         payload = {"model": model, "query": query, "documents": documents, "top_n": top_n}
-        for attempt in range(3):
+        attempt = 0
+        while True:
+            t_attempt = time.time()
             try:
                 resp = self._session.post(
                     self._endpoint, json=payload, timeout=self._config.timeout,
                 )
                 resp.raise_for_status()
                 results = resp.json()["results"]
+                if attempt > 0:
+                    self.retry_success_at.append(attempt + 1)
                 return [(int(item["index"]), float(item["relevance_score"])) for item in results]
             except Exception as exc:
-                if attempt == 2:
-                    raise
-                wait = 2 ** attempt
-                logger.warning(f"rerank API 호출 실패 (attempt {attempt+1}/3), {wait}s 후 재시도: {exc}")
+                self.retry_count += 1
+                self.failed_time_sec += time.time() - t_attempt
+                wait = min(2 ** attempt, 30)  # 쿼리를 버릴 수 없으니 성공할 때까지 무한 재시도 (백오프는 30s에서 상한)
+                logger.warning(f"rerank API 호출 실패 (attempt {attempt+1}), {wait}s 후 재시도: {exc}")
                 time.sleep(wait)
-        raise RuntimeError("unreachable")
+                self.failed_time_sec += wait
+                attempt += 1

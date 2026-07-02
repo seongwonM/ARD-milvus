@@ -72,6 +72,10 @@ def make_rerank_api_score_fn(client: RerankClient, model: str) -> ScoreFn:
     return score
 
 
+def _retry_snapshot(client: RerankClient | EmbeddingClient) -> tuple[int, float, int]:
+    return client.retry_count, client.failed_time_sec, len(client.retry_success_at)
+
+
 def make_embedding_score_fn(client: EmbeddingClient) -> ScoreFn:
     def score(q_text: str, cand_ids: list[str], cand_texts: list[str]) -> dict[str, float]:
         vecs = client.encode([q_text] + cand_texts)
@@ -82,6 +86,7 @@ def make_embedding_score_fn(client: EmbeddingClient) -> ScoreFn:
 
 def run_rerank(
     score_fn: ScoreFn,
+    client: RerankClient | EmbeddingClient,
     rerank_model: str,
     rerank_method: str,
     retrieval_model: str,
@@ -90,14 +95,18 @@ def run_rerank(
     queries: dict,
     qrels: dict,
     top_n: int,
+    request_interval_sec: float = 0.0,
 ) -> dict:
     run: dict[str, dict[str, float]] = {}
-    latencies: list[float] = []
+    latencies: list[float] = []  # 재시도/백오프 시간을 뺀, 순수 처리 시간만
     cand_counts: list[int] = []
     _LOG_SAMPLE = 5
 
     total = len(candidates)
     log_every = max(1, total // 10)
+
+    retry_count_before, failed_time_before, retry_success_before = _retry_snapshot(client)
+    interval_wait_sec = 0.0
 
     t0 = time.time()
     for i, (qid, cand_ids_full) in enumerate(candidates.items(), start=1):
@@ -116,9 +125,16 @@ def run_rerank(
         if len(cand_counts) <= _LOG_SAMPLE:
             logger.info(f"  [샘플 {len(cand_counts)}/{_LOG_SAMPLE}] [{qid}] rerank API로 보내는 청크 수={len(cand_ids)}")
 
+        failed_before_call = client.failed_time_sec
         t_q = time.time()
         run[qid] = score_fn(q_text, cand_ids, cand_texts)
-        latencies.append(time.time() - t_q)
+        call_wall = time.time() - t_q
+        failed_during_call = client.failed_time_sec - failed_before_call
+        latencies.append(max(0.0, call_wall - failed_during_call))  # 재시도/백오프 시간 제외
+
+        if request_interval_sec > 0:
+            time.sleep(request_interval_sec)
+            interval_wait_sec += request_interval_sec
 
         if i % log_every == 0 or i == total:
             logger.info(f"  진행: {i:,}/{total:,} ({round(100*i/total)}%)")
@@ -129,7 +145,14 @@ def run_rerank(
             f"avg={round(sum(cand_counts) / len(cand_counts), 1)}  (top_n={top_n} 상한)"
         )
 
-    elapsed = round(time.time() - t0, 2)
+    retry_count_after, failed_time_after, retry_success_after = _retry_snapshot(client)
+    retry_count = retry_count_after - retry_count_before
+    retry_failed_sec = round(failed_time_after - failed_time_before, 2)
+    retry_calls = retry_success_after - retry_success_before  # 재시도 끝에 결국 성공한 호출 수
+
+    wall_sec = round(time.time() - t0, 2)
+    # 실제 처리(성공) 시간만 — 재시도/백오프, 요청 간 대기(interval)는 제외
+    elapsed = round(max(0.0, wall_sec - retry_failed_sec - interval_wait_sec), 2)
     n = len(run)
     qps = round(n / elapsed, 2) if elapsed > 0 else 0.0
     latencies.sort()
@@ -139,8 +162,15 @@ def run_rerank(
     metrics = evaluate(run, qrels)
     logger.info(
         f"  retrieval={retrieval_model}  rerank={rerank_model}({rerank_method})  top_n={top_n}  "
-        f"elapsed={elapsed}s  qps={qps}  p50={p50_ms}ms  p95={p95_ms}ms"
+        f"elapsed(순수)={elapsed}s  wall(재시도/interval 포함)={wall_sec}s  qps={qps}  p50={p50_ms}ms  p95={p95_ms}ms"
     )
+    if retry_count:
+        logger.info(
+            f"  재시도: 실패한 시도={retry_count}회  재시도 끝에 성공한 호출={retry_calls}건  "
+            f"실패(+백오프)에 쓴 시간={retry_failed_sec}s (elapsed에서 제외됨)"
+        )
+    if interval_wait_sec:
+        logger.info(f"  요청 간 대기: {request_interval_sec}s x {n}건 = {round(interval_wait_sec, 1)}s (elapsed에서 제외됨)")
     logger.info(
         f"  NDCG@10={metrics.get('ndcg_at_10')}  @20={metrics.get('ndcg_at_20')}  "
         f"@50={metrics.get('ndcg_at_50')}  @100={metrics.get('ndcg_at_100')}"
@@ -157,9 +187,14 @@ def run_rerank(
         "top_n": top_n,
         "n_queries": n,
         "rerank_sec": elapsed,
+        "wall_sec": wall_sec,
         "rerank_qps": qps,
         "p50_ms": p50_ms,
         "p95_ms": p95_ms,
+        "retry_count": retry_count,
+        "retry_calls": retry_calls,
+        "retry_failed_sec": retry_failed_sec,
+        "interval_wait_sec": round(interval_wait_sec, 1),
         **metrics,
     }
 
@@ -180,6 +215,18 @@ def main() -> None:
     if not args.rerank_model and not args.embedding_rerank_model:
         ap.error("--rerank-model 또는 --embedding-rerank-model 중 하나는 지정해야 합니다")
 
+    startup_delay = float(os.environ.get("STARTUP_DELAY_SEC", "0"))
+    if startup_delay > 0:
+        logger.info(
+            f"시작 지연 {startup_delay}s 대기 중 (동시에 뜨는 다른 rerank Job들과 API 요청 "
+            f"엇박 처리용 — 총 소요시간에는 미포함)..."
+        )
+        time.sleep(startup_delay)
+
+    request_interval_sec = float(os.environ.get("REQUEST_INTERVAL_SEC", "0"))
+    if request_interval_sec > 0:
+        logger.info(f"요청 간 대기 {request_interval_sec}s 적용 (쿼리마다 API 호출 사이 — 소요시간 집계에서는 제외)")
+
     main_t0 = time.time()
 
     cfg = Config.from_env()
@@ -187,10 +234,10 @@ def main() -> None:
     docs, queries, qrels = load_from_dir(args.data_root)
     os.makedirs(args.out, exist_ok=True)
 
-    # (표시용 모델명, 방식, score 함수) 조합 목록
-    rerankers: list[tuple[str, str, ScoreFn]] = []
+    # (표시용 모델명, 방식, score 함수, client) 조합 목록 — client는 재시도 통계 집계용
+    rerankers: list[tuple[str, str, ScoreFn, RerankClient | EmbeddingClient]] = []
     for model in args.rerank_model:
-        rerankers.append((model, "rerank_api", make_rerank_api_score_fn(rerank_client, model)))
+        rerankers.append((model, "rerank_api", make_rerank_api_score_fn(rerank_client, model), rerank_client))
     for model in args.embedding_rerank_model:
         emb_cfg = EmbeddingConfig(
             endpoint=cfg.embedding.endpoint,
@@ -200,7 +247,7 @@ def main() -> None:
             timeout=cfg.embedding.timeout,
         )
         emb_client = EmbeddingClient(emb_cfg)
-        rerankers.append((model, "embedding_cosine", make_embedding_score_fn(emb_client)))
+        rerankers.append((model, "embedding_cosine", make_embedding_score_fn(emb_client), emb_client))
 
     all_results: list[dict] = []
     run_timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -211,15 +258,15 @@ def main() -> None:
         retrieval_model = retrieval_data["model"]
         candidates = retrieval_data["results"]
 
-        for rerank_model, rerank_method, score_fn in rerankers:
+        for rerank_model, rerank_method, score_fn, client in rerankers:
             for n in args.top_n:
                 logger.info(f"\n{'='*64}")
                 logger.info(f"retrieval={retrieval_model}  rerank={rerank_model}({rerank_method})  top_n={n}")
                 logger.info(f"{'='*64}")
 
                 result = run_rerank(
-                    score_fn, rerank_model, rerank_method, retrieval_model,
-                    candidates, docs, queries, qrels, n,
+                    score_fn, client, rerank_model, rerank_method, retrieval_model,
+                    candidates, docs, queries, qrels, n, request_interval_sec,
                 )
                 all_results.append(result)
 
