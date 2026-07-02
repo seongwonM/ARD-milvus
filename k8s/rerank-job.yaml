@@ -17,6 +17,11 @@
 #   bench-rerank-qwen3-top20 bench-rerank-qwen3-top50 bench-rerank-qwen3-top100
 # 로그: kubectl logs job/bench-rerank-bge-top5  (top_n별로 각각 확인)
 # 결과를 로컬로 자동 복사: ./k8s/fetch-results.ps1 -Stage rerank  (Job 완료까지 대기 후 results/에 저장)
+#
+# 리소스: rerank는 Milvus 접속 없이 corpus_all.parquet(약 21MB)만 메모리에 올려두고
+# API만 호출하는 가벼운 워크로드라 pod당 request 512Mi/limit 1.5Gi로 충분함.
+# 10개 Job(pod) 동시 적용 기준 합계 = request 5Gi / limit 15Gi, cpu request 2 / limit 10 —
+# 가용 자원(CPU 20 / RAM 33Gi) 안에 여유 있게 들어와서 굳이 순차로 나눠 띄울 필요 없음.
 
 # ── 1. Reranker: bge-reranker-v2-m3 (전용 rerank API) ────────────────────────
 apiVersion: batch/v1
@@ -64,11 +69,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -119,11 +124,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -174,11 +179,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -229,11 +234,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -284,11 +289,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -340,11 +345,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -395,11 +400,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -450,11 +455,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -505,11 +510,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -560,11 +565,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "512Mi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1.5Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
