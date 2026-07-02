@@ -180,6 +180,8 @@ def main() -> None:
     if not args.rerank_model and not args.embedding_rerank_model:
         ap.error("--rerank-model 또는 --embedding-rerank-model 중 하나는 지정해야 합니다")
 
+    main_t0 = time.time()
+
     cfg = Config.from_env()
     rerank_client = RerankClient(cfg.embedding)
     docs, queries, qrels = load_from_dir(args.data_root)
@@ -233,7 +235,8 @@ def main() -> None:
     summary_path = os.path.join(args.out, f"summary_{run_timestamp}.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
-    logger.info(f"\n요약 저장 ({len(all_results)}개 조합): {summary_path}")
+    total_elapsed = round(time.time() - main_t0, 1)
+    logger.info(f"\n요약 저장 ({len(all_results)}개 조합, 총 소요={total_elapsed}s): {summary_path}")
 
     print("\n===== RERANK SUMMARY JSON =====")
     print(json.dumps(all_results, ensure_ascii=False, indent=2))
