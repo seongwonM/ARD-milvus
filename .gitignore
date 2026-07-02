@@ -10,4 +10,5 @@ build/
 .venv/
 venv/
 loadtest/cache/
-results/loadtest/
+results/*
+!results/.gitkeep
