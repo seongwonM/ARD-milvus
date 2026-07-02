@@ -40,7 +40,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:df7e630fa0a19acfca30d0fb541c5e67a007cd40
+          image: ghcr.io/seongwonm/ard-milvus:920f2ce3e841ec60cba42cd17a027d5133ce8884
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
@@ -101,7 +101,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:df7e630fa0a19acfca30d0fb541c5e67a007cd40
+          image: ghcr.io/seongwonm/ard-milvus:920f2ce3e841ec60cba42cd17a027d5133ce8884
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
@@ -162,7 +162,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:df7e630fa0a19acfca30d0fb541c5e67a007cd40
+          image: ghcr.io/seongwonm/ard-milvus:920f2ce3e841ec60cba42cd17a027d5133ce8884
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
