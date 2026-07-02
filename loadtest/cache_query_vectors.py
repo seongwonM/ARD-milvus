@@ -38,13 +38,20 @@ def main() -> None:
     ids_path = out_dir / "query_ids.json"
     vecs_path = out_dir / "query_vectors.npy"
 
-    if ids_path.exists() and vecs_path.exists() and not args.force:
-        logger.info(f"[스킵] 이미 캐시 존재: {out_dir} (다시 만들려면 --force)")
-        return
-
     cfg = Config.from_env()
     _, queries, _ = load_from_dir(args.data_root)
     q_ids = list(queries.keys())
+
+    if not args.force and ids_path.exists() and vecs_path.exists():
+        cached_ids = json.loads(ids_path.read_text(encoding="utf-8"))
+        cached_vecs = np.load(vecs_path)
+        if len(cached_vecs) == len(cached_ids) and set(cached_ids) == set(q_ids):
+            logger.info(f"[스킵] 캐시가 현재 쿼리 {len(q_ids):,}개와 완전히 일치 — 재임베딩 생략 (다시 만들려면 --force)")
+            return
+        logger.info(
+            f"[재생성] 캐시가 현재 쿼리와 불일치(캐시 {len(cached_ids):,}개 vs 현재 {len(q_ids):,}개) — 다시 임베딩"
+        )
+
     q_texts = [queries[qid] for qid in q_ids]
 
     client = EmbeddingClient(cfg.embedding)

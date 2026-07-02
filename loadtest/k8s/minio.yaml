@@ -1,0 +1,83 @@
+# loadtest 전용 MinIO manifest. 같은 네임스페이스에 bench용 minio(k8s/minio.yaml,
+# Deployment 이름 "minio")가 이미 떠 있을 수 있어 이름이 겹치지 않도록 전부
+# "-loadtest"를 붙였다. milvus.yaml(loadtest용)이 MINIO_ADDRESS=minio-loadtest:9000으로
+# 이 서비스를 참조하므로, 이름을 바꾸려면 두 파일을 같이 맞춰야 한다.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-loadtest-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-1mb-test
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio-loadtest
+  labels:
+    app: minio-loadtest
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: minio-loadtest
+  template:
+    metadata:
+      labels:
+        app: minio-loadtest
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          command: ["minio", "server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: minioadmin
+            - name: MINIO_ROOT_PASSWORD
+              value: minioadmin
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: minio-loadtest-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-loadtest
+spec:
+  selector:
+    app: minio-loadtest
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001

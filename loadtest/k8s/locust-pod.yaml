@@ -51,8 +51,8 @@ spec:
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
       env:
-        - name: MILVUS_URI
-          value: "http://milvus:19530"
+        - name: MILVUS_URI  # loadtest/k8s/milvus.yaml의 서비스 이름 — bench용 "milvus"와 충돌 방지
+          value: "http://milvus-loadtest:19530"
         - name: MILVUS_COLLECTION
           value: "loadtest_documents"
         - name: EMBEDDING_MODEL

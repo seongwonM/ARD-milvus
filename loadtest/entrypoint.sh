@@ -20,21 +20,21 @@ set -e
 
 : "${MILVUS_NAMESPACE:?MILVUS_NAMESPACE가 비어있습니다 — locust-job.yaml의 downward API(metadata.namespace) 설정을 확인하세요}"
 
-K8S_DIR="${K8S_DIR:-/app/milvus_migration/k8s}"
+K8S_DIR="${K8S_DIR:-/app/milvus_migration/loadtest/k8s}"  # bench용 k8s/milvus.yaml,minio.yaml과 별개 (이름 충돌 방지)
 RESULTS_DIR="${RESULTS_DIR:-/results}"
 
 cleanup_milvus() {
-  echo "----- milvus/minio 정리 (ns=$MILVUS_NAMESPACE) -----"
+  echo "----- milvus-loadtest/minio-loadtest 정리 (ns=$MILVUS_NAMESPACE) -----"
   kubectl delete -f "$K8S_DIR/milvus.yaml" -n "$MILVUS_NAMESPACE" --ignore-not-found --wait=true
   kubectl delete -f "$K8S_DIR/minio.yaml" -n "$MILVUS_NAMESPACE" --ignore-not-found --wait=true
 }
 
 deploy_milvus() {
-  echo "----- milvus/minio 배포 (ns=$MILVUS_NAMESPACE) -----"
+  echo "----- milvus-loadtest/minio-loadtest 배포 (ns=$MILVUS_NAMESPACE) -----"
   kubectl apply -f "$K8S_DIR/minio.yaml" -n "$MILVUS_NAMESPACE"
   kubectl apply -f "$K8S_DIR/milvus.yaml" -n "$MILVUS_NAMESPACE"
-  kubectl wait --for=condition=Ready pod/milvus -n "$MILVUS_NAMESPACE" --timeout=300s
-  kubectl rollout status deploy/minio -n "$MILVUS_NAMESPACE" --timeout=300s
+  kubectl wait --for=condition=Ready pod/milvus-loadtest -n "$MILVUS_NAMESPACE" --timeout=300s
+  kubectl rollout status deploy/minio-loadtest -n "$MILVUS_NAMESPACE" --timeout=300s
 }
 
 # 매번 새로 배포된 빈 milvus에 corpus를 다시 색인한다 (milvus/minio를 지웠다 올렸으므로

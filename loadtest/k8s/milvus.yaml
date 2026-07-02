@@ -1,0 +1,86 @@
+# loadtest 전용 Milvus manifest. 같은 네임스페이스에 bench용 milvus(k8s/milvus.yaml,
+# Pod 이름 "milvus")가 이미 떠 있을 수 있어 이름이 겹치지 않도록 전부 "-loadtest"를 붙였다.
+# entrypoint.sh가 매 테스트마다 이 파일 기준으로 apply/delete하므로, bench의 milvus를
+# 실수로 지우거나 덮어쓰지 않는다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: milvus-loadtest-config
+data:
+  embedEtcd.yaml: |
+    listen-client-urls: http://0.0.0.0:2379
+    advertise-client-urls: http://0.0.0.0:2379
+    quota-backend-bytes: 4294967296
+    auto-compaction-mode: revision
+    auto-compaction-retention: "1000"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: milvus-loadtest-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: milvus-loadtest
+  labels:
+    app: milvus-loadtest
+spec:
+  containers:
+    - name: milvus
+      image: milvusdb/milvus:v2.4.24
+      command: ["milvus", "run", "standalone"]
+      env:
+        - name: ETCD_USE_EMBED
+          value: "true"
+        - name: ETCD_DATA_DIR
+          value: "/var/lib/milvus/etcd"
+        - name: ETCD_CONFIG_PATH
+          value: "/milvus/configs/embedEtcd.yaml"
+        - name: MINIO_ADDRESS
+          value: "minio-loadtest:9000"
+        - name: MINIO_ACCESS_KEY_ID
+          value: minioadmin
+        - name: MINIO_SECRET_ACCESS_KEY
+          value: minioadmin
+        - name: MILVUS_LOG_LEVEL
+          value: "warn"
+      ports:
+        - containerPort: 19530
+      volumeMounts:
+        - name: milvus-config
+          mountPath: /milvus/configs/embedEtcd.yaml
+          subPath: embedEtcd.yaml
+        - name: milvus-data
+          mountPath: /var/lib/milvus
+      resources:
+        requests:
+          cpu: "1"
+          memory: "4Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+  volumes:
+    - name: milvus-config
+      configMap:
+        name: milvus-loadtest-config
+    - name: milvus-data
+      persistentVolumeClaim:
+        claimName: milvus-loadtest-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milvus-loadtest
+spec:
+  selector:
+    app: milvus-loadtest
+  ports:
+    - port: 19530
+      targetPort: 19530
