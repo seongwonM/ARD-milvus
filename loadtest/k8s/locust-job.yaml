@@ -1,6 +1,8 @@
-# 부하테스트 전체 생애주기(milvus/minio 배포 → 색인/캐싱 → 테스트 A/B → 리포트 →
-# milvus/minio 정리)를 이 Job이 전부 스스로 관리한다. apply 한 번이면 끝 —
+# 부하테스트 전체 생애주기를 이 Job이 전부 스스로 관리한다. apply 한 번이면 끝 —
 # 실행 전/후로 사람이 milvus/minio를 따로 지우고 다시 띄울 필요가 없다.
+# 테스트 1회(baseline의 interval 값 하나, ramp 테스트 1회)마다 milvus/minio를
+# 내렸다 새로 올려서 항상 독립된 상태에서 실행한다 (이전 테스트의 캐시/부하 잔여
+# 상태가 다음 테스트에 섞이지 않도록 — 값 하나 바꿀 때마다 pod를 새로 띄우는 것과 동일한 효과).
 # (실제 배포/삭제 로직은 loadtest/entrypoint.sh, 권한은 loadtest/k8s/rbac.yaml)
 #
 # 사전 준비(최초 1회, 네임스페이스당 한 번만):
@@ -25,8 +27,9 @@ metadata:
   name: milvus-loadtest
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 7200  # 무한정 매달리는 것 방지용 안전장치. 기본값 기준 총 소요 ~1~1.5시간
-  # 예상. stage 시간/개수를 늘리면 이 값도 같이 늘릴 것.
+  activeDeadlineSeconds: 10800  # 무한정 매달리는 것 방지용 안전장치. 테스트마다 milvus/minio를
+  # 재배포하는 오버헤드(PVC 재생성/etcd 초기화 등, 회당 수십초~수분)가 더해져 기본값 기준
+  # 총 소요 ~2시간 예상. stage 시간/개수를 늘리면 이 값도 같이 늘릴 것.
   template:
     spec:
       restartPolicy: Never
