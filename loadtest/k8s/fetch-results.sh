@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # k8s/fetch-results.ps1과 동일한 목적/구조 — milvus-loadtest Job 완료를 기다렸다가
-# 결과(csv/html/log/report.txt)를 로컬로 자동 복사한다.
+# 결과(csv/html/log/report.txt)를 로컬로 자동 복사한다. LOADTEST_CACHE_DIR=/results/cache로
+# 저장되는 쿼리/corpus 임베딩 캐시도 /results 밑이라 이 스크립트로 같이 빠져나온다
+# (캐시를 따로 빼는 스크립트는 없음 — /results 전체를 복사하는 것으로 충분).
 #
 # Job의 pod는 완료(Completed)되면 컨테이너가 종료돼서 kubectl cp/exec가 안 되므로,
 # 같은 PVC(loadtest-results, RWX)를 마운트한 채 계속 떠있는 디버그 pod

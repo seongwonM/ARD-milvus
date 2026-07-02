@@ -59,6 +59,8 @@ spec:
           value: "loadtest_documents"
         - name: STARROCKS_HOST  # loadtest/k8s/starrocks.yaml의 서비스 이름 — bench용 "starrocks"와 충돌 방지
           value: "starrocks-loadtest"
+        - name: LOADTEST_CACHE_DIR  # PVC(loadtest-results)에 저장 — pod를 새로 띄워도 캐시 유지
+          value: "/results/cache"
         - name: EMBEDDING_MODEL
           value: "bge-m3"
         - name: EMBEDDING_BATCH_SIZE

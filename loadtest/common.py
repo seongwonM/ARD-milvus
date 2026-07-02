@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,10 @@ from ..store_factory import build_store as _build_store
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CACHE_DIR = Path(__file__).parent / "cache"
+# k8s Job에서는 LOADTEST_CACHE_DIR=/results/cache로 지정해 PVC(loadtest-results)에
+# 저장한다 — 그래야 Job을 지우고 값 바꿔서 다시 apply해도(파드가 새로 뜨어도) 캐시가
+# 남아있어 재임베딩하지 않는다. 로컬에서 직접 실행할 땐 기본값(코드 옆 cache/)을 쓴다.
+DEFAULT_CACHE_DIR = Path(os.environ.get("LOADTEST_CACHE_DIR", str(Path(__file__).parent / "cache")))
 
 
 def load_query_cache(cache_dir: str | Path = DEFAULT_CACHE_DIR) -> tuple[list[str], np.ndarray]:

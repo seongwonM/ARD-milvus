@@ -48,6 +48,8 @@ spec:
                   fieldPath: metadata.namespace
             - name: BACKENDS  # 순회할 백엔드 목록(공백 구분) — 하나만 돌리려면 "milvus" 또는 "starrocks"로 축소
               value: "milvus starrocks"
+            - name: LOADTEST_CACHE_DIR  # PVC(loadtest-results)에 저장 — Job을 지우고 값 바꿔 재실행해도 캐시 유지
+              value: "/results/cache"
             - name: MILVUS_URI  # loadtest/k8s/milvus.yaml의 서비스 이름 — bench용 "milvus"와 충돌 방지
               value: "http://milvus-loadtest:19530"
             - name: MILVUS_COLLECTION
