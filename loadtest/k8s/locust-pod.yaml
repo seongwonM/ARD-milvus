@@ -49,7 +49,7 @@ spec:
   serviceAccountName: loadtest-runner  # 손으로 milvus/minio/starrocks를 apply/delete해볼 때도 쓸 수 있게 동일 권한 부여
   containers:
     - name: locust-loadtest
-      image: ghcr.io/seongwonm/ard-milvus-loadtest:8729c774607170e1b2536de8e89fd09c3e863f8b
+      image: ghcr.io/seongwonm/ard-milvus-loadtest:b3e3ce1e0b5a974a2574301aa65ebe3658926d7b
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
       env:
