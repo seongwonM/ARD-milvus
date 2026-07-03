@@ -99,7 +99,7 @@ def run_rerank(
     qrels: dict,
     top_n: int,
     request_interval_sec: float = 0.0,
-    concurrency: int = 256,
+    concurrency: int = 64,
 ) -> dict:
     """쿼리 하나씩 API 응답을 기다리는 대신, 워커 풀(큐)로 여러 요청을 동시에 흘려보낸다.
 
@@ -241,7 +241,7 @@ def main() -> None:
     ap.add_argument("--top-n", type=int, nargs="+", default=_DEFAULT_TOP_N)
     ap.add_argument("--data-root", default=os.getenv("DATA_ROOT", "/data"))
     ap.add_argument("--out", default="results/rerank")
-    ap.add_argument("--concurrency", type=int, default=int(os.environ.get("RERANK_CONCURRENCY", "256")),
+    ap.add_argument("--concurrency", type=int, default=int(os.environ.get("RERANK_CONCURRENCY", "64")),
                      help="동시에 흘려보낼 rerank 요청 수(워커 풀 크기) — 순차 호출 대신 큐로 흘려서 QPS 측정")
     args = ap.parse_args()
 

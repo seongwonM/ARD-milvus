@@ -31,9 +31,9 @@ class EmbeddingClient:
             "Authorization": f"Bearer {config.api_key}",
         })
         # 큐/워커 풀로 동시에 여러 요청을 흘려보내므로 기본 pool_maxsize(10)보다 넉넉하게 잡아둠
-        # (RERANK_CONCURRENCY 기본값 256과 맞춤 — 낮으면 커넥션이 매번 새로 열려 TCP/TLS
+        # (RERANK_CONCURRENCY 기본값 64와 맞춤 — 낮으면 커넥션이 매번 새로 열려 TCP/TLS
         # 핸드셰이크 시간이 순수 응답시간 측정에 섞여 들어감)
-        adapter = HTTPAdapter(pool_maxsize=256)
+        adapter = HTTPAdapter(pool_maxsize=64)
         self._session.mount("http://", adapter)
         self._session.mount("https://", adapter)
         # 재시도 통계 (rerank_runner.py가 실행 구간별로 스냅샷 차이를 내서 리포트)
