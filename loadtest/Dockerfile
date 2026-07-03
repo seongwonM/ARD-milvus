@@ -7,6 +7,12 @@
 # ghcr.io/seongwonm/ard-milvus-loadtest:<sha>를 빌드/푸시하고 loadtest/k8s/*.yaml의
 # 이미지 태그도 자동으로 갱신한다 — 보통은 수동 빌드가 필요 없다.
 #
+# 주의: 이 이미지는 COPY . ./milvus_migration/로 레포 루트 파일(milvus_store.py 등)도
+# 포함해서 빌드되지만, build-push-loadtest.yml의 트리거 경로는 loadtest/**만 본다.
+# 즉 루트 *.py만 고치면(예: milvus_store.py 버그 수정) 이 워크플로는 자동으로 안 돈다 —
+# gh workflow_dispatch로 수동 실행하거나, loadtest/** 안의 파일도 같이 건드려야 한다
+# (2026-07-03 실제로 이 문제로 수동 대응함).
+#
 # 수동 빌드가 필요할 때(로컬 테스트 등, 레포 루트에서 실행·context는 반드시 루트):
 #   docker build -f loadtest/Dockerfile -t <registry>/ard-milvus-loadtest:manual .
 #   docker push <registry>/ard-milvus-loadtest:manual
