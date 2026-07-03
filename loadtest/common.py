@@ -82,8 +82,15 @@ class QueryCursor:
 
 
 def build_store(cfg: Config):
-    """VECTOR_BACKEND(milvus|starrocks)에 따라 알맞은 store를 만든다 (store_factory.py)."""
-    return _build_store(cfg)
+    """VECTOR_BACKEND(milvus|starrocks)에 따라 알맞은 store를 만든다 (store_factory.py).
+
+    gevent 내장 threadpool(진짜 OS 스레드)에서 생성한다 — MilvusClient 생성자가
+    내부적으로 서버와 동기 gRPC handshake를 할 수 있는데, 이걸 그린렛에서 직접
+    호출하면 threadpool_search_one과 똑같은 이유로 이벤트 루프 전체가 멈출 수
+    있다(연결 시점이라 search_one을 아무리 잘 감싸도 소용없음). 그래서 store
+    생성 자체도 항상 threadpool을 거친다.
+    """
+    return gevent.get_hub().threadpool.apply(_build_store, (cfg,))
 
 
 def threadpool_search_one(store, collection: str, vector, top_k: int):
