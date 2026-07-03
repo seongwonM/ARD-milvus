@@ -1,0 +1,21 @@
+# 결과 공유용 PVC — retrieval/rerank Job들이 공통으로 마운트합니다.
+# k8s/bench-jobs.yaml에 같이 있던 걸 분리했습니다 — retrieval Job 없이 rerank만 돌릴 때도
+# (로컬에 이미 있는 top100 결과를 이 PVC에 직접 주입해서) 이 파일 하나만 먼저 적용하면 됩니다.
+#
+# 실행: kubectl apply -f k8s/bench-results-pvc.yaml
+#
+# retrieval 3개 Job이 동시에 마운트하므로 ReadWriteMany 필수 — ReadWriteOnce(Azure Disk 등)로
+# 하면 동시 실행되는 Job들이 볼륨 attach를 기다리며 멈춥니다.
+# nfs.csi.k8s.io 기반 StorageClass(RWX 지원) 사용. 클러스터마다 이름이 다르니
+# `kubectl get storageclass`로 provisioner가 nfs.csi.k8s.io인 이름을 확인해 교체하세요.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bench-results
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-1mb-test
+  resources:
+    requests:
+      storage: 5Gi

@@ -1,12 +1,21 @@
 # 수동 디버그용 Pod — sleep infinity로 띄운 뒤 exec로 들어가서
 # retrieval_runner.py / rerank_runner.py를 직접 실행/테스트할 때 사용합니다.
+# bench-results PVC를 마운트하고 있어서, retrieval Job 없이 rerank만 돌리고 싶을 때
+# (로컬에 이미 top100 결과 JSON이 있는 경우) PVC에 파일을 주입하는 용도로도 씁니다 —
+# k8s/bench-results-pvc.yaml을 먼저 적용해 PVC를 만든 뒤 이 Pod를 띄우고 kubectl cp로 주입하세요.
 #
-# 실행: kubectl apply -f k8s/pod.yaml
+# 실행: kubectl apply -f k8s/bench-results-pvc.yaml && kubectl apply -f k8s/pod.yaml
 # 접속: kubectl exec -it ard-milvus -- /bin/sh
 #   $ python -m milvus_migration.bench.retrieval_runner --data-root /data --out /results/retrieval
 #   $ python -m milvus_migration.bench.rerank_runner --retrieval-result /results/retrieval/*.json \
 #         --rerank-model qwen3-reranker --data-root /data --out /results/rerank
 # 결과 확인: kubectl cp ard-milvus:/results ./results
+# 로컬 top100 결과를 PVC에 주입 — 로컬도 fetch-results.ps1이 받아둔 그대로 results/retrieval/
+# 폴더 구조를 유지해야 함(파일명뿐 아니라 /results/retrieval/ 경로 자체가 rerank_runner.py
+# --retrieval-result 인자와 정확히 일치해야 함):
+#   kubectl cp ./results/retrieval/hcp_llm_latest_top100.json ard-milvus:/results/retrieval/hcp_llm_latest_top100.json
+#   kubectl cp ./results/retrieval/bge_m3_top100.json ard-milvus:/results/retrieval/bge_m3_top100.json
+#   kubectl cp ./results/retrieval/qwen3_embedding_8b_top100.json ard-milvus:/results/retrieval/qwen3_embedding_8b_top100.json
 # 삭제: kubectl delete pod ard-milvus
 apiVersion: v1
 kind: Pod

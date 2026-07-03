@@ -1,6 +1,8 @@
 # Reranking Job — Qwen3-Embedding-8B (retrieval 때 쓰던 임베딩 API 재사용, cosine 재정렬,
 # --embedding-rerank-model — "qwen3 reranker"는 별도 API가 아니라 이 방식).
-# retrieval Job 3개(k8s/bench-jobs.yaml)가 모두 완료된 뒤 적용하세요.
+# PVC(bench-results)에 /results/retrieval/*.json (retrieval top100 결과)이 이미 있어야
+# 합니다 — retrieval Job 3개(k8s/bench-jobs.yaml)를 돌려서 채우거나, 로컬에 이미 있는
+# top100 결과를 아래 "PVC 준비" 방법으로 직접 주입하세요.
 # 리랭커별로 파일을 분리했습니다(bge: k8s/rerank-job-bge.yaml, qwen3: 이 파일) —
 # 모델 하나당 5개(top_n=5/10/20/50/100) Job만 동시에 뜨게 해서 리소스 여유를 두기 위함.
 # top_n마다도 Job(pod)을 분리했습니다 — top_n을 한 pod에서 순차로 돌리면 뒤 top_n일수록
@@ -11,6 +13,15 @@
 #   kubectl wait --for=condition=complete \
 #     job/bench-rerank-bge-top5 job/bench-rerank-bge-top10 job/bench-rerank-bge-top20 \
 #     job/bench-rerank-bge-top50 job/bench-rerank-bge-top100 --timeout=3600s
+#   kubectl apply -f k8s/rerank-job-qwen3.yaml
+#
+# PVC 준비 (retrieval Job 없이 로컬 top100 결과를 직접 쓰는 경우 — k8s/pod.yaml 참고).
+# 로컬도 results/retrieval/ 폴더 구조 그대로 유지해야 함(경로 자체가 --retrieval-result와 일치해야 함):
+#   kubectl apply -f k8s/bench-results-pvc.yaml
+#   kubectl apply -f k8s/pod.yaml
+#   kubectl cp ./results/retrieval/hcp_llm_latest_top100.json ard-milvus:/results/retrieval/hcp_llm_latest_top100.json
+#   kubectl cp ./results/retrieval/bge_m3_top100.json ard-milvus:/results/retrieval/bge_m3_top100.json
+#   kubectl cp ./results/retrieval/qwen3_embedding_8b_top100.json ard-milvus:/results/retrieval/qwen3_embedding_8b_top100.json
 #   kubectl apply -f k8s/rerank-job-qwen3.yaml
 #
 # 삭제: kubectl delete job bench-rerank-qwen3-top5 bench-rerank-qwen3-top10 \

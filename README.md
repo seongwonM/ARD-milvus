@@ -186,17 +186,22 @@ python -m milvus_migration.bench.rerank_runner \
 - `k8s/milvus.yaml` — Milvus standalone (embedded etcd) + PVC
 - `k8s/minio.yaml` — Milvus의 blob storage 백엔드. `milvus.yaml`이 `minio:9000` / `minioadmin`/`minioadmin`으로
   참조하므로 서비스 이름·계정을 바꾸면 `milvus.yaml`도 같이 맞춰야 합니다.
-- `k8s/bench-jobs.yaml` — retrieval 3개 모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) Job + 결과 공유용 PVC(`bench-results`).
+- `k8s/bench-results-pvc.yaml` — retrieval/rerank Job들이 공유하는 결과용 PVC(`bench-results`).
+  `bench-jobs.yaml`에 같이 있던 걸 분리한 것 — retrieval Job 없이 rerank만(로컬에 이미 있는
+  top100 결과를 주입해서) 돌릴 때도 이 파일만 먼저 적용하면 됩니다.
+- `k8s/bench-jobs.yaml` — retrieval 3개 모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) Job.
   각 Job의 `REINDEX` env 값을 `"true"`로 바꾸면(Job은 재적용 전 delete 필요) 인덱스가 있어도 강제로
   재색인해서 인덱싱 속도를 다시 측정합니다 (기본값 `"false"` — 있으면 재사용).
 - `k8s/rerank-job-bge.yaml`, `k8s/rerank-job-qwen3.yaml` — retrieval Job들이 끝난 뒤 적용하는
   reranking Job. 리랭커(bge/qwen3)별로 파일과 Job(pod)을 분리해 5개씩 나눠 돌립니다 —
   10개를 한 파일에서 동시에 띄우면 리소스 여유가 빠듯해서, bge 파일을 먼저 적용해 완료를
-  확인한 뒤 qwen3 파일을 적용하는 걸 권장합니다.
+  확인한 뒤 qwen3 파일을 적용하는 걸 권장합니다. retrieval 없이 로컬 top100 결과만으로
+  돌리는 방법은 각 파일 헤더의 "PVC 준비" 절 참고.
 - `k8s/pod.yaml` — 수동 디버그용 Pod (`kubectl exec`로 들어가 직접 실행). `bench-results` PVC를
-  마운트한 채 계속 떠있어서, `fetch-results.ps1`이 이 pod를 PVC 읽기 통로로도 사용합니다
+  마운트한 채 계속 떠있어서, `fetch-results.ps1`이 이 pod를 PVC 읽기 통로로도 사용하고,
+  로컬 top100 결과를 PVC에 주입할 때도 `kubectl cp`의 대상으로 씁니다
   (Job의 pod는 완료되면 컨테이너가 종료돼서 그 pod로는 kubectl cp/exec가 안 됨 — 데이터는
-  PVC에 그대로 남아있지만 읽어올 살아있는 pod가 따로 필요함).
+  PVC에 그대로 남아있지만 읽어올/써넣을 살아있는 pod가 따로 필요함).
 - `k8s/fetch-results.ps1` — 위 디버그 pod을 자동으로 띄우고, Job 완료를 기다렸다가 결과 JSON/로그를
   로컬 `results/`로 자동 복사 (`./k8s/fetch-results.ps1 -Stage retrieval`, `-Stage rerank`, `-Stage all`)
 - `k8s/starrocks.yaml` — StarRocks(allin1: FE+BE 단일 컨테이너, 벡터 인덱스 HNSW) standalone + PVC.
@@ -208,7 +213,7 @@ python -m milvus_migration.bench.rerank_runner \
 
 > retrieval 결과 PVC(`bench-results`)는 3개 Job이 동시에 마운트하므로 `ReadWriteMany`(nfs.csi.k8s.io
 > 기반 StorageClass)로 만들어져 있습니다. `ReadWriteOnce`로 바꾸면 동시 실행 시 volume attach 대기로 멈춥니다.
-> 클러스터마다 StorageClass 이름이 다르니 `k8s/bench-jobs.yaml`의 `storageClassName`을 환경에 맞게 바꾸세요.
+> 클러스터마다 StorageClass 이름이 다르니 `k8s/bench-results-pvc.yaml`의 `storageClassName`을 환경에 맞게 바꾸세요.
 
 ## 파일 구조
 
@@ -232,7 +237,8 @@ milvus_migration/
 │   ├── milvus.yaml        # Milvus standalone
 │   ├── minio.yaml         # MinIO (Milvus blob storage 백엔드)
 │   ├── starrocks.yaml     # StarRocks standalone (allin1, 벡터 인덱스)
-│   ├── bench-jobs.yaml    # retrieval Job × 3 + PVC(ReadWriteMany) — Milvus
+│   ├── bench-results-pvc.yaml  # 결과 공유용 PVC(ReadWriteMany) — retrieval/rerank Job 공용
+│   ├── bench-jobs.yaml    # retrieval Job × 3 — Milvus
 │   ├── bench-jobs-starrocks.yaml  # 동일 retrieval Job × 3 — StarRocks
 │   ├── rerank-job-bge.yaml    # reranking Job — bge-reranker-v2-m3 (5개)
 │   ├── rerank-job-qwen3.yaml  # reranking Job — Qwen3-Embedding-8B (5개)
