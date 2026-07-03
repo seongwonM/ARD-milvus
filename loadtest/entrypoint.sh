@@ -34,7 +34,10 @@ deploy_backend() {
     milvus)
       kubectl apply -f "$K8S_DIR/minio.yaml" -n "$MILVUS_NAMESPACE"
       kubectl apply -f "$K8S_DIR/milvus.yaml" -n "$MILVUS_NAMESPACE"
-      kubectl wait --for=condition=Ready pod/milvus-loadtest -n "$MILVUS_NAMESPACE" --timeout=300s
+      # milvus-loadtest-data PVC는 테스트마다 새로 생성되는데, 이 네임스페이스의
+      # 기본 스토리지클래스(디스크 attach 기반)는 NFS보다 프로비저닝/attach가 오래
+      # 걸려 300s로는 부족한 경우가 있었음(2026-07-03 Job Failed 실측) → 600s로 완화.
+      kubectl wait --for=condition=Ready pod/milvus-loadtest -n "$MILVUS_NAMESPACE" --timeout=600s
       kubectl rollout status deploy/minio-loadtest -n "$MILVUS_NAMESPACE" --timeout=300s
       ;;
     starrocks)
