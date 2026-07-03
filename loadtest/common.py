@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
+import time
 from pathlib import Path
 
 import gevent
@@ -19,6 +21,14 @@ from ..store_factory import build_store as _build_store
 
 logger = logging.getLogger(__name__)
 
+
+def _debug(msg: str) -> None:
+    """locust는 --logfile로 logging 출력을 파일로만 보내서 kubectl logs에 안 보인다.
+    print()는 logging 핸들러를 안 거치고 stdout에 바로 쓰이므로 --logfile과
+    무관하게 항상 보인다 — 어느 단계에서 멈추는지 확인하려고 넣은 체크포인트.
+    """
+    print(f"[DEBUG {time.strftime('%H:%M:%S')}] {msg}", file=sys.stdout, flush=True)
+
 # k8s Job에서는 LOADTEST_CACHE_DIR=/results/cache로 지정해 PVC(loadtest-results)에
 # 저장한다 — 그래야 Job을 지우고 값 바꿔서 다시 apply해도(파드가 새로 뜨어도) 캐시가
 # 남아있어 재임베딩하지 않는다. 로컬에서 직접 실행할 땐 기본값(코드 옆 cache/)을 쓴다.
@@ -27,6 +37,7 @@ DEFAULT_CACHE_DIR = Path(os.environ.get("LOADTEST_CACHE_DIR", str(Path(__file__)
 
 def load_query_cache(cache_dir: str | Path = DEFAULT_CACHE_DIR) -> tuple[list[str], np.ndarray]:
     """cache_query_vectors.py가 저장한 쿼리 id/벡터를 읽어온다."""
+    _debug(f"쿼리 캐시 로드 시작: {cache_dir}")
     d = Path(cache_dir)
     ids_path = d / "query_ids.json"
     vecs_path = d / "query_vectors.npy"
@@ -40,6 +51,7 @@ def load_query_cache(cache_dir: str | Path = DEFAULT_CACHE_DIR) -> tuple[list[st
     if len(ids) != len(vecs):
         raise ValueError(f"쿼리 id({len(ids)})와 벡터({len(vecs)}) 개수가 다릅니다.")
     logger.info(f"[쿼리 캐시] {len(ids):,}개 로드 (dim={vecs.shape[1]})")
+    _debug(f"쿼리 캐시 로드 완료: {len(ids):,}개")
     return ids, vecs
 
 
@@ -90,7 +102,13 @@ def build_store(cfg: Config):
     있다(연결 시점이라 search_one을 아무리 잘 감싸도 소용없음). 그래서 store
     생성 자체도 항상 threadpool을 거친다.
     """
-    return gevent.get_hub().threadpool.apply(_build_store, (cfg,))
+    _debug(f"build_store 시작 (backend={cfg.backend})")
+    result = gevent.get_hub().threadpool.apply(_build_store, (cfg,))
+    _debug("build_store 완료")
+    return result
+
+
+_first_search_logged = False
 
 
 def threadpool_search_one(store, collection: str, vector, top_k: int):
@@ -102,4 +120,12 @@ def threadpool_search_one(store, collection: str, vector, top_k: int):
     Locust 프로세스가 아예 응답 없이 멈춰버린다. 실제 OS 스레드로 넘기면
     호출한 그린렛만 대기하고 이벤트 루프(run-time 타이머 등)는 계속 돈다.
     """
-    return gevent.get_hub().threadpool.apply(store.search_one, (collection, vector), {"top_k": top_k})
+    global _first_search_logged
+    first = not _first_search_logged
+    if first:
+        _debug("첫 search_one 시작")
+    result = gevent.get_hub().threadpool.apply(store.search_one, (collection, vector), {"top_k": top_k})
+    if first:
+        _debug("첫 search_one 완료")
+        _first_search_logged = True
+    return result

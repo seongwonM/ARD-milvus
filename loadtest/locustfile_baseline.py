@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from locust import User, events, task
 
 from milvus_migration.config import Config
-from milvus_migration.loadtest.common import QueryCursor, build_store, load_query_cache, threadpool_search_one
+from milvus_migration.loadtest.common import QueryCursor, _debug, build_store, load_query_cache, threadpool_search_one
 from milvus_migration.store_factory import collection_name
 
 logger = logging.getLogger(__name__)
@@ -48,11 +48,13 @@ def _add_args(parser) -> None:
     )
 
 
+_debug("locustfile_baseline 모듈 로딩 시작")
 _cfg = Config.from_env()
 _store = build_store(_cfg)
 _collection = collection_name(_cfg)
 _query_ids, _query_vecs = load_query_cache()
 _cursor = QueryCursor(len(_query_ids))
+_debug("locustfile_baseline 모듈 로딩 완료")
 
 
 class MilvusBaselineUser(User):
