@@ -31,7 +31,10 @@ import json
 import logging
 import os
 import re
+import statistics
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 import numpy as np
@@ -96,48 +99,76 @@ def run_rerank(
     qrels: dict,
     top_n: int,
     request_interval_sec: float = 0.0,
+    concurrency: int = 256,
 ) -> dict:
+    """쿼리 하나씩 API 응답을 기다리는 대신, 워커 풀(큐)로 여러 요청을 동시에 흘려보낸다.
+
+    QPS는 총 소요시간(n/wall_sec)이 아니라 API 응답 속도(latency)로부터 역산한다 —
+    wall_sec 기반으로 계산하면 동시에 띄운 워커(큐) 개수 자체가 QPS에 그대로 반영돼서
+    "API가 실제로 얼마나 빠른지"가 아니라 "워커를 몇 개 띄웠는지"를 재는 꼴이 되기 때문.
+    Little's Law: 정상상태에서 처리량 = 동시성(concurrency) / 평균 응답시간(latency).
+    """
     run: dict[str, dict[str, float]] = {}
-    latencies: list[float] = []  # 재시도/백오프 시간을 뺀, 순수 처리 시간만
+    run_lock = threading.Lock()
+    latencies: list[float] = []  # 스레드-로컬로 잰 순수 응답 시간(재시도/백오프 제외)
+    latencies_lock = threading.Lock()
     cand_counts: list[int] = []
+    stats_lock = threading.Lock()
+    progress = {"done": 0}
     _LOG_SAMPLE = 5
 
     total = len(candidates)
     log_every = max(1, total // 10)
 
     retry_count_before, failed_time_before, retry_success_before = _retry_snapshot(client)
-    interval_wait_sec = 0.0
 
-    t0 = time.time()
-    for i, (qid, cand_ids_full) in enumerate(candidates.items(), start=1):
+    def process_one(qid: str, cand_ids_full: list[str]) -> None:
         q_text = queries.get(qid)
         if q_text is None:
             logger.warning(
                 f"  [스킵] qid={qid} 가 현재 queries_all.parquet에 없음 "
                 f"(retrieval 시점과 data_root 불일치 가능)"
             )
-            continue
+            return
         cand_ids = cand_ids_full[:top_n]
         if not cand_ids:
-            continue
+            return
         cand_texts = [_doc_text(docs, d) for d in cand_ids]
-        cand_counts.append(len(cand_ids))
-        if len(cand_counts) <= _LOG_SAMPLE:
-            logger.info(f"  [샘플 {len(cand_counts)}/{_LOG_SAMPLE}] [{qid}] rerank API로 보내는 청크 수={len(cand_ids)}")
 
-        failed_before_call = client.failed_time_sec
-        t_q = time.time()
-        run[qid] = score_fn(q_text, cand_ids, cand_texts)
-        call_wall = time.time() - t_q
-        failed_during_call = client.failed_time_sec - failed_before_call
-        latencies.append(max(0.0, call_wall - failed_during_call))  # 재시도/백오프 시간 제외
+        with stats_lock:
+            cand_counts.append(len(cand_ids))
+            sample_idx = len(cand_counts)
+        if sample_idx <= _LOG_SAMPLE:
+            logger.info(f"  [샘플 {sample_idx}/{_LOG_SAMPLE}] [{qid}] rerank API로 보내는 청크 수={len(cand_ids)}")
 
-        if request_interval_sec > 0:
-            time.sleep(request_interval_sec)
-            interval_wait_sec += request_interval_sec
+        result = score_fn(q_text, cand_ids, cand_texts)
+        # client.last_latency_sec는 스레드-로컬 — 이 스레드가 방금 성공한 호출의 순수 응답
+        # 시간(재시도/백오프 제외)만 담고 있어서, 다른 워커 스레드와 섞일 걱정 없이 바로 읽으면 됨.
+        latency = client.last_latency_sec
 
-        if i % log_every == 0 or i == total:
-            logger.info(f"  진행: {i:,}/{total:,} ({round(100*i/total)}%)")
+        with run_lock:
+            run[qid] = result
+        with latencies_lock:
+            latencies.append(latency)
+        with stats_lock:
+            progress["done"] += 1
+            done = progress["done"]
+        if done % log_every == 0 or done == total:
+            logger.info(f"  진행: {done:,}/{total:,} ({round(100*done/total)}%)")
+
+    interval_wait_sec = 0.0
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = []
+        for qid, cand_ids_full in candidates.items():
+            futures.append(executor.submit(process_one, qid, cand_ids_full))
+            if request_interval_sec > 0:
+                time.sleep(request_interval_sec)  # 큐에 넣는(요청 제출) 속도 조절용
+                interval_wait_sec += request_interval_sec
+        for fut in as_completed(futures):
+            fut.result()  # 워커 스레드에서 발생한 예외를 여기서 다시 던짐
+
+    wall_sec = round(time.time() - t0, 2)
 
     if cand_counts:
         logger.info(
@@ -150,27 +181,26 @@ def run_rerank(
     retry_failed_sec = round(failed_time_after - failed_time_before, 2)
     retry_calls = retry_success_after - retry_success_before  # 재시도 끝에 결국 성공한 호출 수
 
-    wall_sec = round(time.time() - t0, 2)
-    # 실제 처리(성공) 시간만 — 재시도/백오프, 요청 간 대기(interval)는 제외
-    elapsed = round(max(0.0, wall_sec - retry_failed_sec - interval_wait_sec), 2)
     n = len(run)
-    qps = round(n / elapsed, 2) if elapsed > 0 else 0.0
     latencies.sort()
+    mean_latency_sec = statistics.mean(latencies) if latencies else 0.0
+    qps = round(concurrency / mean_latency_sec, 2) if mean_latency_sec > 0 else 0.0
     p50_ms = round(latencies[int(len(latencies) * 0.50)] * 1000, 1) if latencies else 0.0
     p95_ms = round(latencies[int(len(latencies) * 0.95)] * 1000, 1) if latencies else 0.0
 
     metrics = evaluate(run, qrels)
     logger.info(
         f"  retrieval={retrieval_model}  rerank={rerank_model}({rerank_method})  top_n={top_n}  "
-        f"elapsed(순수)={elapsed}s  wall(재시도/interval 포함)={wall_sec}s  qps={qps}  p50={p50_ms}ms  p95={p95_ms}ms"
+        f"concurrency={concurrency}  wall={wall_sec}s  qps={qps}(=concurrency/평균응답시간)  "
+        f"평균응답={round(mean_latency_sec*1000, 1)}ms  p50={p50_ms}ms  p95={p95_ms}ms"
     )
     if retry_count:
         logger.info(
             f"  재시도: 실패한 시도={retry_count}회  재시도 끝에 성공한 호출={retry_calls}건  "
-            f"실패(+백오프)에 쓴 시간={retry_failed_sec}s (elapsed에서 제외됨)"
+            f"실패(+백오프)에 쓴 시간={retry_failed_sec}s (latency 집계에서 제외됨)"
         )
     if interval_wait_sec:
-        logger.info(f"  요청 간 대기: {request_interval_sec}s x {n}건 = {round(interval_wait_sec, 1)}s (elapsed에서 제외됨)")
+        logger.info(f"  요청 제출 간 대기: {request_interval_sec}s x {n}건 = {round(interval_wait_sec, 1)}s")
     logger.info(
         f"  NDCG@10={metrics.get('ndcg_at_10')}  @20={metrics.get('ndcg_at_20')}  "
         f"@50={metrics.get('ndcg_at_50')}  @100={metrics.get('ndcg_at_100')}"
@@ -186,9 +216,10 @@ def run_rerank(
         "rerank_method": rerank_method,
         "top_n": top_n,
         "n_queries": n,
-        "rerank_sec": elapsed,
+        "concurrency": concurrency,
         "wall_sec": wall_sec,
         "rerank_qps": qps,
+        "mean_latency_ms": round(mean_latency_sec * 1000, 1),
         "p50_ms": p50_ms,
         "p95_ms": p95_ms,
         "retry_count": retry_count,
@@ -210,6 +241,8 @@ def main() -> None:
     ap.add_argument("--top-n", type=int, nargs="+", default=_DEFAULT_TOP_N)
     ap.add_argument("--data-root", default=os.getenv("DATA_ROOT", "/data"))
     ap.add_argument("--out", default="results/rerank")
+    ap.add_argument("--concurrency", type=int, default=int(os.environ.get("RERANK_CONCURRENCY", "256")),
+                     help="동시에 흘려보낼 rerank 요청 수(워커 풀 크기) — 순차 호출 대신 큐로 흘려서 QPS 측정")
     args = ap.parse_args()
 
     if not args.rerank_model and not args.embedding_rerank_model:
@@ -225,7 +258,8 @@ def main() -> None:
 
     request_interval_sec = float(os.environ.get("REQUEST_INTERVAL_SEC", "0"))
     if request_interval_sec > 0:
-        logger.info(f"요청 간 대기 {request_interval_sec}s 적용 (쿼리마다 API 호출 사이 — 소요시간 집계에서는 제외)")
+        logger.info(f"요청 제출 간 대기 {request_interval_sec}s 적용 (큐에 새 요청 넣는 속도 조절)")
+    logger.info(f"동시성(concurrency)={args.concurrency} — 응답을 기다리지 않고 큐로 흘려보냄")
 
     main_t0 = time.time()
 
@@ -267,6 +301,7 @@ def main() -> None:
                 result = run_rerank(
                     score_fn, client, rerank_model, rerank_method, retrieval_model,
                     candidates, docs, queries, qrels, n, request_interval_sec,
+                    args.concurrency,
                 )
                 all_results.append(result)
 
