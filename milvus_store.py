@@ -113,6 +113,10 @@ class MilvusStore:
                 time.sleep(wait)
 
     def finalize(self, name: str) -> None:
+        # flush 없이 바로 load_collection()을 부르면, 아직 세그먼트가 seal되지
+        # 않은 최근 insert 데이터가 통계(get_collection_stats)에도 검색 대상
+        # (load된 세그먼트)에도 빠질 수 있다 — flush로 먼저 전부 persist시킨다.
+        self._client.flush(name)
         self._client.load_collection(name)
         logger.info(f"  인덱스 로드 완료: {name}")
 
