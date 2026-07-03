@@ -38,9 +38,10 @@
 # RERANK_CONCURRENCY: 큐로 동시에 흘려보낼 요청 수. QPS는 총 소요시간이 아니라 API 응답
 # latency로부터 역산하므로(Little's Law: qps = concurrency / 평균응답시간) 이 값을 올려도
 # QPS 계산 자체가 왜곡되지 않음 — 대신 동시 요청 수가 늘어난 만큼 리소스 사용량은 커짐.
-# 256 → 64(503 대량) → 32로 단계적으로 낮춤(2026-07-03) — 64에서도 500/503/504가 섞여서
-# 나와 API가 여러 지점에서 동시에 무너지는 상태였음(단순 rate-limit이 아니라 백엔드 자체가
-# 이 정도 동시 부하를 못 버티는 신호). 32에서도 5xx가 잦으면 24 → 16 순으로 더 낮출 것,
+# 256 → 64(503 대량) → 32(500/503/504 섞여서 발생) → 16으로 단계적으로 낮춤(2026-07-03).
+# 재시도/백오프도 개별 호출 attempt 기반 대신 풀 공유 쿨다운(서킷 브레이커, reranker.py/
+# embedding.py의 _wait_if_paused 참고)으로 바꾸고 AWS "Full Jitter" 방식을 적용해 워커들이
+# 똑같은 시각에 우르르 재시도하는 걸 방지함. 16에서도 5xx가 잦으면 8로 더 낮출 것,
 # 안정적이면 이 값을 유지.
 #
 # STARTUP_DELAY_SEC: 같은 파일 안 5개 pod가 전부 동시에 같은 API(엔드포인트 공유)를 두들기면
@@ -86,7 +87,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "32"
+              value: "16"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -147,7 +148,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "32"
+              value: "16"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -208,7 +209,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "32"
+              value: "16"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -269,7 +270,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "32"
+              value: "16"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -330,7 +331,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "32"
+              value: "16"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT

@@ -8,6 +8,7 @@ OpenAI-compatible 형식 기본 지원:
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from typing import Any
@@ -20,6 +21,9 @@ from .config import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
 
+_MAX_BACKOFF_EXPONENT = 5   # 2**5=32 > 30 상한이라 이 이상은 무의미 — consecutive_failures가 커져도 큰 수 연산 안 하게 캡
+_RESUME_JITTER_SEC = 1.0   # 공유 쿨다운이 끝난 뒤에도 워커마다 이 범위 안에서 랜덤하게 재개 시각을 흩어서 동시 재시도 방지
+
 
 class EmbeddingClient:
 
@@ -31,9 +35,9 @@ class EmbeddingClient:
             "Authorization": f"Bearer {config.api_key}",
         })
         # 큐/워커 풀로 동시에 여러 요청을 흘려보내므로 기본 pool_maxsize(10)보다 넉넉하게 잡아둠
-        # (RERANK_CONCURRENCY 기본값 32와 맞춤 — 낮으면 커넥션이 매번 새로 열려 TCP/TLS
+        # (RERANK_CONCURRENCY 기본값 16과 맞춤 — 낮으면 커넥션이 매번 새로 열려 TCP/TLS
         # 핸드셰이크 시간이 순수 응답시간 측정에 섞여 들어감)
-        adapter = HTTPAdapter(pool_maxsize=32)
+        adapter = HTTPAdapter(pool_maxsize=16)
         self._session.mount("http://", adapter)
         self._session.mount("https://", adapter)
         # 재시도 통계 (rerank_runner.py가 실행 구간별로 스냅샷 차이를 내서 리포트)
@@ -60,12 +64,22 @@ class EmbeddingClient:
         return getattr(self._local, "last_latency_sec", 0.0)
 
     def _wait_if_paused(self) -> float:
-        """공유 쿨다운이 걸려 있으면 풀릴 때까지 대기하고, 실제로 대기한 시간(초)을 반환."""
+        """공유 쿨다운이 걸려 있으면 풀릴 때까지 대기하고, 실제로 대기한 시간(초)을 반환.
+
+        쿨다운 자체는 모든 워커가 공유하는 시각이라, 그 시각에 그대로 깨어나면 워커 전부가
+        똑같은 순간에 다시 API를 때리는 새로운 thundering herd가 생긴다(AWS "Exponential
+        Backoff And Jitter" 글에서 경고하는 패턴). 그래서 쿨다운이 끝난 뒤 워커마다 짧은
+        랜덤 지터를 한 번 더 둬서 재개 시각 자체를 흩뜨린다.
+        """
         waited = 0.0
         while True:
             with self._retry_lock:
                 remaining = self._paused_until - time.monotonic()
             if remaining <= 0:
+                jitter = random.uniform(0, _RESUME_JITTER_SEC)
+                if jitter > 0:
+                    time.sleep(jitter)
+                    waited += jitter
                 return waited
             time.sleep(remaining)
             waited += remaining
@@ -103,11 +117,15 @@ class EmbeddingClient:
                     self.retry_count += 1
                     self.failed_time_sec += time.time() - t_attempt
                     self._consecutive_failures += 1
-                    wait = min(2 ** self._consecutive_failures, 30)  # 쿼리를 버릴 수 없으니 성공할 때까지 무한 재시도
+                    # 쿼리를 버릴 수 없으니 성공할 때까지 무한 재시도. AWS "Full Jitter" 공식
+                    # (sleep = random(0, min(cap, base*2^n)))을 그대로 적용 — 지수 자체에도
+                    # 상한을 둬서 실패가 오래 이어져도 2**n이 쓸데없이 커지지 않게 함.
+                    cap = min(2 ** min(self._consecutive_failures, _MAX_BACKOFF_EXPONENT), 30)
+                    wait = random.uniform(0, cap)
                     self._paused_until = max(self._paused_until, time.monotonic() + wait)
                 logger.warning(
                     f"API 호출 실패 (attempt {attempt+1}, 공유 연속실패 {self._consecutive_failures}회), "
-                    f"전체 워커 {wait}s 쿨다운: {exc}"
+                    f"전체 워커 {wait:.1f}s 쿨다운: {exc}"
                 )
                 attempt += 1
 
