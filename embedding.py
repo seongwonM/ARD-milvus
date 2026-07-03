@@ -1,5 +1,7 @@
 """Cloud Platform Embedding API 클라이언트.
 
+(CI 재트리거용 사소한 주석 변경 — 기능 변화 없음)
+
 OpenAI-compatible 형식 기본 지원:
   POST {endpoint}
   Body: {"input": ["text1", "text2"], "model": "..."}
