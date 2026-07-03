@@ -51,18 +51,36 @@ class RerankClient:
         # 재시도 통계 (rerank_runner.py가 실행 구간별로 스냅샷 차이를 내서 리포트)
         self.retry_count = 0          # 실패한 시도 총 횟수(성공 전 재시도만, 최종 실패 포함)
         self.retry_success_at: list[int] = []  # 재시도 끝에 성공했을 때 몇 번째 시도였는지(1-base)
-        self.failed_time_sec = 0.0    # 실패 시도 자체 + 백오프 sleep에 쓴 시간 누적 (성공 시간과 분리)
+        self.failed_time_sec = 0.0    # 실패 시도 자체 + 공유 쿨다운 대기에 쓴 시간 누적 (성공 시간과 분리)
         # 동시 요청(큐/워커 풀) 환경에서 호출 하나하나의 순수 응답 시간을 재려면 전역 카운터로는
         # 어느 스레드의 latency인지 구분이 안 됨 — 스레드-로컬로 "이 스레드가 방금 성공한 호출의
         # 걸린 시간"만 들고 있게 해서 race 없이 호출자가 바로 읽어갈 수 있게 함.
         self._local = threading.local()
-        # retry_count/failed_time_sec는 여러 워커 스레드가 동시에 += 할 수 있어 락으로 보호
+        # retry_count/failed_time_sec/_consecutive_failures/_paused_until은 여러 워커 스레드가
+        # 동시에 건드릴 수 있어 락으로 보호
         self._retry_lock = threading.Lock()
+        # 공유 쿨다운(서킷 브레이커): 개별 호출이 각자 자기 실패 횟수만 보고 backoff하면,
+        # 동시에 여러 워커가 같은 타이밍에 몰려서 재시도하는 "thundering herd"가 생김 —
+        # 대신 어느 워커든 실패하면 이 시각(_paused_until)까지는 풀 전체가 새 시도를 안 하게 해서
+        # API가 회복할 시간을 준다. 실패가 계속되면 이 값도 계속 뒤로 밀림(지수 증가, 상한 30s).
+        self._consecutive_failures = 0
+        self._paused_until = 0.0  # time.monotonic() 기준
 
     @property
     def last_latency_sec(self) -> float:
         """직전에 이 스레드에서 성공한 rerank() 호출의 순수 응답 시간(재시도/백오프 제외)."""
         return getattr(self._local, "last_latency_sec", 0.0)
+
+    def _wait_if_paused(self) -> float:
+        """공유 쿨다운이 걸려 있으면 풀릴 때까지 대기하고, 실제로 대기한 시간(초)을 반환."""
+        waited = 0.0
+        while True:
+            with self._retry_lock:
+                remaining = self._paused_until - time.monotonic()
+            if remaining <= 0:
+                return waited
+            time.sleep(remaining)
+            waited += remaining
 
     def rerank(
         self, model: str, query: str, documents: list[str], top_n: int,
@@ -74,6 +92,10 @@ class RerankClient:
         payload = {"model": model, "query": query, "documents": documents, "top_n": top_n}
         attempt = 0
         while True:
+            pause_wait = self._wait_if_paused()
+            if pause_wait > 0:
+                with self._retry_lock:
+                    self.failed_time_sec += pause_wait
             t_attempt = time.time()
             try:
                 resp = self._session.post(
@@ -84,14 +106,18 @@ class RerankClient:
                 self._local.last_latency_sec = time.time() - t_attempt
                 if attempt > 0:
                     self.retry_success_at.append(attempt + 1)
+                with self._retry_lock:
+                    self._consecutive_failures = 0
                 return [(int(item["index"]), float(item["relevance_score"])) for item in results]
             except Exception as exc:
-                wait = min(2 ** attempt, 30)  # 쿼리를 버릴 수 없으니 성공할 때까지 무한 재시도 (백오프는 30s에서 상한)
                 with self._retry_lock:
                     self.retry_count += 1
                     self.failed_time_sec += time.time() - t_attempt
-                logger.warning(f"rerank API 호출 실패 (attempt {attempt+1}), {wait}s 후 재시도: {exc}")
-                time.sleep(wait)
-                with self._retry_lock:
-                    self.failed_time_sec += wait
+                    self._consecutive_failures += 1
+                    wait = min(2 ** self._consecutive_failures, 30)  # 쿼리를 버릴 수 없으니 성공할 때까지 무한 재시도
+                    self._paused_until = max(self._paused_until, time.monotonic() + wait)
+                logger.warning(
+                    f"rerank API 호출 실패 (attempt {attempt+1}, 공유 연속실패 {self._consecutive_failures}회), "
+                    f"전체 워커 {wait}s 쿨다운: {exc}"
+                )
                 attempt += 1

@@ -118,7 +118,7 @@ def run_rerank(
     _LOG_SAMPLE = 5
 
     total = len(candidates)
-    log_every = max(1, total // 10)
+    log_every = max(1, round(total * 0.025))  # 2.5% 단위(예: 12,000개면 300개 = concurrency 32 기준 약 10배치마다)
 
     retry_count_before, failed_time_before, retry_success_before = _retry_snapshot(client)
 
