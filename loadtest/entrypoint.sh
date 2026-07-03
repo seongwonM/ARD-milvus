@@ -29,6 +29,17 @@ K8S_DIR="${K8S_DIR:-/app/milvus_migration/loadtest/k8s}"  # bench용 k8s/*.yaml�
 RESULTS_DIR="${RESULTS_DIR:-/results}"
 BACKENDS="${BACKENDS:-milvus starrocks}"  # 공백 구분 — 순서대로 순회하며 동일 테스트를 각각 독립 실행
 
+# "3m"/"30s"/"1h" 같은 locust 스타일 기간 문자열을 초 단위 정수로 변환.
+# run_isolated_test의 watchdog 타임아웃(예상 소요시간 + 여유분)을 계산하는 데 쓴다.
+to_seconds() {
+  case "$1" in
+    *h) echo $(( ${1%h} * 3600 )) ;;
+    *m) echo $(( ${1%m} * 60 )) ;;
+    *s) echo $(( ${1%s} )) ;;
+    *)  echo "$1" ;;
+  esac
+}
+
 deploy_backend() {
   case "$1" in
     milvus)
@@ -71,12 +82,50 @@ seed_corpus() {
 
 # 테스트 1회를 항상 깨끗한 DB 위에서 실행: 배포 → 색인 → 테스트 → 정리.
 # 정리를 맨 앞에도 넣는 건 이전 실행이 비정상 종료해 리소스가 남아있을 경우의 안전장치.
+#
+# locust는 --logfile로 실행 중 로그를 파일에만 남기기 때문에(kubectl logs엔 안 보임),
+# 몇 시간 동안 로그가 조용하면 "정상적으로 조용히 도는 중"인지 "완전히 멈춘 것"인지
+# 구분이 안 된다(2026-07-03 pymilvus+gevent hang 사고 때 겪음). 그래서:
+#   1) 60초마다 하트비트를 stdout에 남겨 "최소한 프로세스는 살아있다"를 보여주고,
+#   2) 예상 소요시간(타입별로 계산된 timeout_sec) + 여유분을 넘기면 강제 종료하고
+#      로그에 "hang 의심"이라고 명시적으로 남긴다 — activeDeadlineSeconds(수 시간)까지
+#      기다리지 않고 훨씬 빨리, 훨씬 명확한 원인과 함께 실패한다.
 run_isolated_test() {
+  timeout_sec="$1"; shift
+
   cleanup_backend "$VECTOR_BACKEND"
   deploy_backend "$VECTOR_BACKEND"
   seed_corpus
-  "$@"
+
+  echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") [$VECTOR_BACKEND] 테스트 실행: $* (watchdog timeout=${timeout_sec}s)"
+
+  ( i=0
+    while :; do
+      sleep 60
+      i=$((i + 60))
+      echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") [$VECTOR_BACKEND] ...아직 실행 중 (경과 ${i}s / timeout ${timeout_sec}s)"
+    done
+  ) &
+  heartbeat_pid=$!
+
+  set +e
+  timeout "$timeout_sec" "$@"
+  rc=$?
+  set -e
+
+  kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+
+  if [ "$rc" -eq 124 ]; then
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") [$VECTOR_BACKEND] !!! watchdog timeout(${timeout_sec}s) 초과로 강제 종료 — locust가 멈춘 것으로 의심됨 (예: gevent monkey-patch와 호환 안 되는 blocking 클라이언트 호출) !!!" >&2
+  elif [ "$rc" -ne 0 ]; then
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") [$VECTOR_BACKEND] !!! 테스트가 오류로 종료됨 (exit=$rc) !!!" >&2
+  else
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") [$VECTOR_BACKEND] 테스트 정상 종료"
+  fi
+
   cleanup_backend "$VECTOR_BACKEND"
+  return "$rc"
 }
 
 echo "===== 1) 쿼리/corpus 벡터 캐싱 (백엔드 무관 공유 로컬 캐시, 1회성) ====="
@@ -84,6 +133,13 @@ python -m milvus_migration.loadtest.cache_query_vectors --data-root /data
 python -m milvus_migration.loadtest.cache_chunk_vectors --data-root /data
 
 : > "$RESULTS_DIR/report.txt"  # 통합 리포트 초기화 (백엔드별 리포트를 이어붙임)
+
+# run_isolated_test의 watchdog timeout — 설정된 실행 시간(런타임/stage 구성)으로부터
+# 역산하고, 배포 직후 locust 시작 오버헤드를 감안해 여유분을 더한다.
+BASELINE_TIMEOUT_SEC=$(( $(to_seconds "$BASELINE_RUNTIME") + 120 ))
+_ramp_stage_count=$(( $(echo "$LOADTEST_STAGE_USERS" | tr ',' '\n' | grep -c .) + 1 ))  # +1: sentinel(첫 stage 재현)
+RAMP_TIMEOUT_SEC=$(( LOADTEST_STAGE_DURATION_SEC * _ramp_stage_count + 180 ))
+echo "watchdog timeout: baseline=${BASELINE_TIMEOUT_SEC}s, ramp=${RAMP_TIMEOUT_SEC}s(stage ${_ramp_stage_count}개)"
 
 for BACKEND in $BACKENDS; do
   export VECTOR_BACKEND="$BACKEND"
@@ -93,14 +149,14 @@ for BACKEND in $BACKENDS; do
   BASELINE_STATS=""
   for N in $BASELINE_INTERVALS; do
     echo "  [$BACKEND] interval=${N}s"
-    run_isolated_test locust -f milvus_migration/loadtest/locustfile_baseline.py --headless --only-summary \
+    run_isolated_test "$BASELINE_TIMEOUT_SEC" locust -f milvus_migration/loadtest/locustfile_baseline.py --headless --only-summary \
       -u 1 -r 1 --run-time "$BASELINE_RUNTIME" --interval "$N" \
       --csv="$RESULTS_DIR/baseline_${BACKEND}_N${N}" --logfile="$RESULTS_DIR/baseline_${BACKEND}_N${N}.log"
     BASELINE_STATS="$BASELINE_STATS $RESULTS_DIR/baseline_${BACKEND}_N${N}_stats.csv"
   done
 
   echo "----- [$BACKEND] 3) 테스트 B: 동시성 램프 (독립 실행) -----"
-  run_isolated_test locust -f milvus_migration/loadtest/locustfile_ramp.py --headless --only-summary \
+  run_isolated_test "$RAMP_TIMEOUT_SEC" locust -f milvus_migration/loadtest/locustfile_ramp.py --headless --only-summary \
     --logfile="$RESULTS_DIR/ramp_${BACKEND}.log" --html="$RESULTS_DIR/ramp_${BACKEND}.html" \
     --csv="$RESULTS_DIR/ramp_${BACKEND}" --request-log="$RESULTS_DIR/ramp_${BACKEND}_requests.csv"
 
