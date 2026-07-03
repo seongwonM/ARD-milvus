@@ -48,7 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from locust import LoadTestShape, User, constant, events, task
 
 from milvus_migration.config import Config
-from milvus_migration.loadtest.common import QueryCursor, build_store, load_query_cache
+from milvus_migration.loadtest.common import QueryCursor, build_store, load_query_cache, threadpool_search_one
 from milvus_migration.store_factory import collection_name
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ class MilvusLoadUser(User):
         start = time.perf_counter()
         exc = None
         try:
-            _store.search_one(_collection, vec, top_k=10)
+            threadpool_search_one(_store, _collection, vec, top_k=10)
         except Exception as e:
             exc = e
         events.request.fire(

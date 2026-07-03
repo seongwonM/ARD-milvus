@@ -11,6 +11,7 @@ import logging
 import os
 from pathlib import Path
 
+import gevent
 import numpy as np
 
 from ..config import Config
@@ -83,3 +84,15 @@ class QueryCursor:
 def build_store(cfg: Config):
     """VECTOR_BACKEND(milvus|starrocks)에 따라 알맞은 store를 만든다 (store_factory.py)."""
     return _build_store(cfg)
+
+
+def threadpool_search_one(store, collection: str, vector, top_k: int):
+    """store.search_one을 gevent 내장 threadpool(진짜 OS 스레드)에서 실행한다.
+
+    pymilvus는 동기 gRPC(grpcio C-core)를 쓰는데, 이는 gevent monkey-patch와
+    협조하지 않는다 — 그린렛에서 직접 호출하면 이 블로킹 호출이 프로세스의
+    유일한 이벤트 루프 자체를 통째로 멈춰서(타임아웃도 안 걸리고 무한 hang),
+    Locust 프로세스가 아예 응답 없이 멈춰버린다. 실제 OS 스레드로 넘기면
+    호출한 그린렛만 대기하고 이벤트 루프(run-time 타이머 등)는 계속 돈다.
+    """
+    return gevent.get_hub().threadpool.apply(store.search_one, (collection, vector), {"top_k": top_k})
