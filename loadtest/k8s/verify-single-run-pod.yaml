@@ -29,7 +29,7 @@ spec:
   serviceAccountName: loadtest-runner  # loadtest/k8s/rbac.yaml — 자기 ns의 milvus/minio를 스스로 apply/delete
   containers:
     - name: verify-single-run
-      image: ghcr.io/seongwonm/ard-milvus-loadtest:edbcb9bbbcde9d2f1e9102648b4143177037c057
+      image: ghcr.io/seongwonm/ard-milvus-loadtest:68bf60609e6d7afe04bfb95c6f741b0efd74bf29
       imagePullPolicy: Always
       workingDir: /app
       command: ["/bin/sh", "-c"]
@@ -64,13 +64,35 @@ spec:
           python -m milvus_migration.loadtest.seed_collection --data-root /data
 
           echo "===== 4) locust baseline 1회 (interval=10s, run-time=3m) ====="
-          locust -f milvus_migration/loadtest/locustfile_baseline.py --headless --only-summary \
+          # entrypoint.sh는 --only-summary를 써서 실시간 stats 테이블(RPS/응답시간/실패건수)
+          # 출력을 꺼버리기 때문에 locust 실행 중 진짜 로그가 하나도 안 찍힌다. 여기서는
+          # --only-summary를 빼서 locust 내장 stats 테이블이 몇 초 간격으로 stdout에 직접
+          # 찍히게 한다(--logfile은 logging 모듈 출력만 파일로 보내고 이 stats 출력과는
+          # 무관 — kubectl logs에 그대로 보임). 진행 중 실제 요청 수/실패 건수가 보이므로
+          # "still running" 하트비트보다 훨씬 신뢰도 높은 신호다. hang이면 이 테이블 자체가
+          # 멈추므로 여전히 timeout watchdog으로 감지한다.
+          set +e
+          timeout 300 locust -f milvus_migration/loadtest/locustfile_baseline.py --headless \
             -u 1 -r 1 --run-time 3m --interval 10 \
             --csv="$RESULTS_DIR/verify_baseline" --logfile="$RESULTS_DIR/verify_baseline.log"
+          rc=$?
+          set -e
+
+          if [ "$rc" -eq 124 ]; then
+            echo "!!! watchdog timeout(300s) 초과로 강제 종료 — locust가 멈춘 것으로 의심됨 (gevent monkey-patch와 호환 안 되는 blocking 호출 등) !!!" >&2
+          elif [ "$rc" -ne 0 ]; then
+            echo "!!! locust가 오류로 종료됨 (exit=$rc) !!!" >&2
+          else
+            echo "locust 정상 종료"
+          fi
 
           echo "===== 5) cleanup_backend ====="
           cleanup_backend
 
+          if [ "$rc" -ne 0 ]; then
+            echo "===== 검증 실패 (locust exit=$rc) — Pod 상태가 Error로 남음 ====="
+            exit "$rc"
+          fi
           echo "===== 검증 완료: 이 사이클이 Job 안에서도 동일하게 동작함 ====="
       env:
         - name: MILVUS_NAMESPACE  # deploy/cleanup_backend가 이 값으로 milvus/minio를 apply/delete
