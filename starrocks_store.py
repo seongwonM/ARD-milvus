@@ -39,7 +39,7 @@ def _vec_literal(vec) -> str:
 
 class StarRocksStore:
 
-    _INSERT_BATCH = 500  # SQL INSERT라 Milvus(gRPC, 64)보다 배치를 크게 잡아도 됨
+    _INSERT_BATCH = 128  # SQL INSERT라 Milvus(gRPC, 64)보다 배치를 크게 잡아도 됨
 
     def __init__(
         self,
@@ -186,9 +186,9 @@ class StarRocksStore:
     def _search_single(self, name: str, vector, top_k: int) -> list[tuple[str, float]]:
         lit = _vec_literal(vector)
         sql = (
-            f"SELECT `doc_id`, approx_cosine_similarity({lit}, vector) AS score "
+            f"SELECT `doc_id`, approx_cosine_similarity({lit}, `vector`) AS score "
             f"FROM `{name}` "
-            f"ORDER BY approx_cosine_similarity({lit}, vector) DESC "
+            f"ORDER BY approx_cosine_similarity({lit}, `vector`) DESC "
             f"LIMIT {int(top_k)}"
         )
         rows = self._fetchall(sql)
