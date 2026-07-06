@@ -16,7 +16,7 @@ class MilvusConfig:
 class StarRocksConfig:
     """StarRocks는 MySQL 프로토콜(기본 포트 9030)로 접속 — pymysql 사용."""
     host: str       = field(default_factory=lambda: os.environ.get("STARROCKS_HOST", "localhost"))
-    port: int       = field(default_factory=lambda: os.environ.get("STARROCKS_PORT", "9030"))
+    port: int       = field(default_factory=lambda: int(os.environ.get("STARROCKS_PORT", "9030").split(":")[-1]))
     user: str       = field(default_factory=lambda: os.environ.get("STARROCKS_USER", "root"))
     password: str   = field(default_factory=lambda: os.environ.get("STARROCKS_PASSWORD", ""))
     database: str   = field(default_factory=lambda: os.environ.get("STARROCKS_DATABASE", "milvus_migration"))
