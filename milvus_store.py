@@ -20,6 +20,11 @@ from .vector_store_common import _SEARCH_CHUNK, _TEXT_MAX_BYTES, _trunc
 
 _INSERT_BATCH = 64
 
+# bench/retrieval_runner.py가 청크를 얼마나 모아서 한 번에 _insert_with_retry로
+# 넘길지 계산할 때 쓰는 예산 — gRPC 기본 메시지 크기 제한(64MB)보다 한참
+# 여유있게(고차원 모델에서 batch가 너무 크면 "received message larger than max" 에러가 남).
+_INSERT_BUDGET_BYTES = 20_000_000
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +40,16 @@ class MilvusStore:
         self._uri   = uri
         self._token = token
         logger.info(f"[Milvus] 연결: {uri}")
+
+    def insert_batch_size(self, dim: int) -> int:
+        """bench/retrieval_runner.py가 인덱싱 중 청크를 몇 개씩 모아 삽입할지 결정할 때 쓴다.
+
+        Milvus는 gRPC(protobuf 바이너리)로 벡터를 보내므로 float 1개=4바이트로 계산한다
+        (StarRocksStore.insert_batch_size는 SQL 텍스트 리터럴이라 계산식이 다름 — 백엔드마다
+        전송 방식이 달라 배치 크기 산정 로직도 각 store가 스스로 갖고 있어야 한다).
+        """
+        per_row = dim * 4 + _TEXT_MAX_BYTES + 600  # vector(float32) + text + doc_id/protobuf 오버헤드
+        return max(200, min(5_000, _INSERT_BUDGET_BYTES // per_row))
 
     # ── 컬렉션 관리 ──────────────────────────────────────────────────────────
 

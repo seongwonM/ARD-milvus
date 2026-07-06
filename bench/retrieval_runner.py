@@ -34,24 +34,16 @@ from milvus_migration.bench.evaluator import evaluate
 from milvus_migration.config import Config
 from milvus_migration.embedding import EmbeddingClient
 from milvus_migration.store_factory import build_store
-from milvus_migration.vector_store_common import _trunc, _TEXT_MAX_BYTES, _SEARCH_CHUNK
+from milvus_migration.vector_store_common import _trunc, _SEARCH_CHUNK
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# gRPC 기본 메시지 크기 제한(64MB)보다 한참 여유있게 — 고차원 모델(Qwen3 dim=4096 등)에서
-# insert batch가 너무 크면 "received message larger than max" 에러가 남
-_INSERT_BUDGET_BYTES = 20_000_000
 _TOP_K = 100
 
 
 def _safe_name(model_id: str) -> str:
     return re.sub(r"[^a-z0-9_]", "_", model_id.lower())[:200]
-
-
-def _insert_batch_size(dim: int) -> int:
-    per_row = dim * 4 + _TEXT_MAX_BYTES + 600  # vector(float32) + text + doc_id/protobuf 오버헤드
-    return max(200, min(5_000, _INSERT_BUDGET_BYTES // per_row))
 
 
 def _build_index(
@@ -65,7 +57,7 @@ def _build_index(
     store.create_collection(collection, dim=dim)
     doc_ids = list(docs.keys())
     n_total = len(doc_ids)
-    insert_batch = _insert_batch_size(dim)
+    insert_batch = store.insert_batch_size(dim)
     logger.info(f"  insert batch size: {insert_batch} (dim={dim})")
 
     t0 = time.time()
