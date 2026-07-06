@@ -41,15 +41,18 @@ class MilvusStore:
         self._token = token
         logger.info(f"[Milvus] 연결: {uri}")
 
-    def insert_batch_size(self, dim: int) -> int:
-        """bench/retrieval_runner.py가 인덱싱 중 청크를 몇 개씩 모아 삽입할지 결정할 때 쓴다.
+    def insert_budget_bytes(self) -> int:
+        """bench/retrieval_runner.py가 인덱싱 중 한 번의 _insert_with_retry 호출에
+        몇 바이트어치 청크를 모아 넘길지 결정할 때 쓰는 예산."""
+        return _INSERT_BUDGET_BYTES
 
-        Milvus는 gRPC(protobuf 바이너리)로 벡터를 보내므로 float 1개=4바이트로 계산한다
-        (StarRocksStore.insert_batch_size는 SQL 텍스트 리터럴이라 계산식이 다름 — 백엔드마다
-        전송 방식이 달라 배치 크기 산정 로직도 각 store가 스스로 갖고 있어야 한다).
+    def estimate_row_bytes(self, doc_id: str, text: str, vector) -> int:
+        """gRPC(protobuf 바이너리)로 보내는 한 행의 대략적인 바이트 수.
+
+        float32 벡터는 4바이트/개로 고정이라(StarRocksStore처럼 SQL 텍스트 리터럴로
+        바뀌며 크기가 들쭉날쭉해지는 문제가 없음) 추정이 곧 실제와 거의 같다.
         """
-        per_row = dim * 4 + _TEXT_MAX_BYTES + 600  # vector(float32) + text + doc_id/protobuf 오버헤드
-        return max(200, min(5_000, _INSERT_BUDGET_BYTES // per_row))
+        return len(vector) * 4 + len(text.encode("utf-8")) + len(doc_id.encode("utf-8")) + 200
 
     # ── 컬렉션 관리 ──────────────────────────────────────────────────────────
 

@@ -63,7 +63,7 @@ class StarRocksStore:
         except Exception as exc:
             logger.warning(f"[StarRocks] enable_experimental_vector 설정 실패(이미 켜져 있으면 무해): {exc}")
 
-        # insert_batch_size()가 실제 클러스터 설정을 기준으로 배치를 잡을 수 있도록
+        # insert_budget_bytes()가 실제 클러스터 설정을 기준으로 예산을 잡을 수 있도록
         # max_allowed_packet(MySQL 프로토콜 — 세션/서버당 다르게 설정될 수 있음)을 직접
         # 조회한다. 하드코딩된 값을 가정하지 않기 위함(2026-07 실측: 기본값 32MB로 가정한
         # 계산도 실제로는 틀릴 수 있어 안전하게 클러스터에 직접 물어봄).
@@ -137,38 +137,43 @@ class StarRocksStore:
 
     # ── 데이터 삽입 ──────────────────────────────────────────────────────────
 
-    def insert_batch_size(self, dim: int) -> int:
-        """호출자(bench/retrieval_runner.py)가 청크를 얼마나 모아서 한 번에
-        _insert_with_retry로 넘길지 결정할 때 쓰는 배치 크기.
+    def insert_budget_bytes(self) -> int:
+        """호출자(bench/retrieval_runner.py, upload())가 한 번의 INSERT SQL에
+        몇 바이트어치를 모아 보낼지 결정할 때 쓰는 예산.
 
-        Milvus(gRPC, protobuf 바이너리 — float 1개=4바이트)와 달리 StarRocks는
-        벡터를 SQL 텍스트 리터럴로 보낸다(_vec_literal — "0.123456789,..."). float
-        하나가 부호/정수부/소수점/최대 17자리+구분자까지 포함하면 20바이트를 넘길
-        수 있어, Milvus 기준(4바이트/float)으로 계산한 배치를 그대로 쓰면 실제
-        SQL 크기가 예상의 4~5배로 커져 max_allowed_packet을 넘겨 연결이 끊긴다
-        (2026-07 실측 — Qwen3처럼 고차원일수록 더 크게 벗어남). 그래서 float당
-        24바이트로 넉넉히 잡고, 실제 조회한 max_allowed_packet의 절반만 예산으로
-        쓴다(다른 세션 동시 사용, 헤더/이스케이프 오버헤드 감안한 여유분).
+        실제 조회한 max_allowed_packet의 절반만 쓴다(다른 세션 동시 사용,
+        헤더 오버헤드 감안한 여유분). 행 하나의 바이트 수는 추정하지 않고
+        estimate_row_bytes()가 실제 SQL 조각을 만들어 정확히 잰다 — float repr
+        길이나 escape 오버헤드를 추정치로 잡았다가 실제보다 작아서
+        max_allowed_packet을 넘겨 연결이 끊긴 적이 있어서(2026-07 실측),
+        이제는 추정 대신 실측으로 바꿨다.
         """
-        per_row = dim * 24 + _TEXT_MAX_BYTES + 200
-        budget = self._max_packet_bytes // 2
-        return max(50, min(2_000, budget // per_row))
+        return self._max_packet_bytes // 2
+
+    def estimate_row_bytes(self, doc_id: str, text: str, vector) -> int:
+        """이 행이 INSERT SQL에 실제로 차지할 바이트 수 — 정확히 그 SQL 조각을
+        만들어서 잰다(부호/자릿수가 들쭉날쭉한 float repr, escape 오버헤드 등을
+        추정하지 않음)."""
+        frag = f"(0, {self._conn.escape(doc_id)}, {self._conn.escape(text)}, {_vec_literal(vector)})"
+        return len(frag.encode("utf-8"))
 
     def upload(self, name: str, data_iter) -> int:
         """(id, doc_id, text, vector) 이터레이터를 받아 삽입. vector: np.ndarray 또는 list."""
         batch: list[dict] = []
+        batch_bytes = 0
         total = 0
-        insert_batch = None  # 첫 벡터를 봐야 dim을 알 수 있어 지연 계산
+        budget = self.insert_budget_bytes()
 
         for pid, doc_id, text, vec in data_iter:
-            if insert_batch is None:
-                insert_batch = self.insert_batch_size(len(vec))
-            batch.append({"id": pid, "doc_id": doc_id, "text": _trunc(text), "vector": vec})
-
-            if len(batch) >= insert_batch:
+            text = _trunc(text)
+            row_bytes = self.estimate_row_bytes(doc_id, text, vec)
+            if batch and batch_bytes + row_bytes > budget:
                 self._insert_with_retry(name, batch)
                 total += len(batch)
                 batch.clear()
+                batch_bytes = 0
+            batch.append({"id": pid, "doc_id": doc_id, "text": text, "vector": vec})
+            batch_bytes += row_bytes
 
         if batch:
             self._insert_with_retry(name, batch)

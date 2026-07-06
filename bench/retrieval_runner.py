@@ -57,12 +57,13 @@ def _build_index(
     store.create_collection(collection, dim=dim)
     doc_ids = list(docs.keys())
     n_total = len(doc_ids)
-    insert_batch = store.insert_batch_size(dim)
-    logger.info(f"  insert batch size: {insert_batch} (dim={dim})")
+    insert_budget = store.insert_budget_bytes()
+    logger.info(f"  insert byte budget: {insert_budget:,} (dim={dim})")
 
     t0 = time.time()
     pid = 0
     pending: list[dict] = []
+    pending_bytes = 0
     chunk_timings: list[dict] = []
     insert_timings: list[dict] = []
 
@@ -90,10 +91,12 @@ def _build_index(
         )
 
         for doc_id, text, vec in zip(chunk_ids, texts, embs):
-            pending.append({"id": pid, "doc_id": doc_id, "text": _trunc(text), "vector": vec.tolist()})
+            trunc_text = _trunc(text)
+            pending.append({"id": pid, "doc_id": doc_id, "text": trunc_text, "vector": vec.tolist()})
+            pending_bytes += store.estimate_row_bytes(doc_id, trunc_text, vec)
             pid += 1
 
-        if len(pending) >= insert_batch:
+        if pending_bytes >= insert_budget:
             n_rows = len(pending)
             t_ins = time.time()
             store._insert_with_retry(collection, pending)
@@ -105,6 +108,7 @@ def _build_index(
                 "sec_per_row": round(ins_sec / n_rows, 6) if n_rows else 0.0,
             })
             pending.clear()
+            pending_bytes = 0
             elapsed = round(time.time() - t0, 1)
             dps = round(pid / elapsed, 1) if elapsed > 0 else 0
             logger.info(
