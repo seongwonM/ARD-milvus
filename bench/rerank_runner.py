@@ -117,9 +117,14 @@ def make_precomputed_embedding_score_fn(
     doc_id_chunks = [unique_doc_ids[i: i + bs] for i in range(0, n_docs, bs)]
     text_chunks = [doc_texts[i: i + bs] for i in range(0, n_docs, bs)]
     n_chunks = len(text_chunks)
+    # concurrency는 쿼리 처리(수천~수만 건)용 큐 크기를 그대로 재사용한 값이라, top_n이
+    # 작아 문서 배치 수가 그보다 적으면(예: top_n=5일 때 배치 45개인데 concurrency=256)
+    # 어차피 배치 수만큼만 동시에 나간다 — 헷갈리지 않게 실제 쓰는 값을 따로 계산해서 로그에 남김.
+    doc_concurrency = min(concurrency, n_chunks) if n_chunks else 1
     logger.info(
         f"  [사전 인코딩 - 문서만] 유니크 후보 문서 {n_docs:,}개, {n_chunks:,}배치(batch_size={bs}), "
-        f"concurrency={concurrency}로 동시 인코딩 (실제 인덱싱 단계에 해당)"
+        f"동시 요청={doc_concurrency}(설정 concurrency={concurrency}, 배치 수 상한에 걸림) "
+        f"(실제 인덱싱 단계에 해당)"
     )
 
     doc_vec_map: dict[str, np.ndarray] = {}
@@ -142,7 +147,7 @@ def make_precomputed_embedding_score_fn(
                 f"(문서 약 {min(done * bs, n_docs):,}/{n_docs:,})  경과={round(time.time() - t_pre, 1)}s"
             )
 
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+    with ThreadPoolExecutor(max_workers=doc_concurrency) as executor:
         futures = [executor.submit(encode_chunk, i) for i in range(n_chunks)]
         for fut in as_completed(futures):
             fut.result()
