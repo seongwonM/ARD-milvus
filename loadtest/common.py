@@ -118,7 +118,7 @@ def _run_coro_threadsafe(loop: asyncio.AbstractEventLoop, coro):
     def _on_done(fut: "asyncio.Future") -> None:
         try:
             value = fut.result()
-        except Exception as e:  # noqa: BLE001 - 원본 예외를 그대로 그린렛 쪽에 전달
+        except Exception as e:  # 원본 예외를 그대로 그린렛 쪽에 전달
             main_loop.run_callback_threadsafe(async_result.set_exception, e)
         else:
             main_loop.run_callback_threadsafe(async_result.set, value)
