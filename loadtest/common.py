@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import gevent
+import gevent.event
 import numpy as np
 
 from ..config import Config
@@ -99,6 +100,34 @@ def _run_loop_forever(loop: asyncio.AbstractEventLoop) -> None:
     loop.run_forever()
 
 
+def _run_coro_threadsafe(loop: asyncio.AbstractEventLoop, coro):
+    """다른(백그라운드) 스레드에서 도는 asyncio 루프에 코루틴을 넘기고, 호출한
+    그린렛에서 결과를 기다린다.
+
+    asyncio.run_coroutine_threadsafe(...)가 리턴하는 concurrent.futures.Future의
+    .result()를 그린렛에서 직접 부르면 gevent가 patch한 threading.Condition을
+    타는데, 이게 간헐적으로 LoopExit을 던진다(gevent 자체에 보고된 알려진 문제 —
+    gevent/gevent#1350). 대신 gevent가 스스로의 threadpool에서 쓰는 것과 같은
+    방식 — 백그라운드 스레드가 hub.loop.run_callback_threadsafe로 메인 hub에
+    안전하게 콜백을 넣고, 그린렛은 gevent 네이티브 AsyncResult.get()으로
+    기다린다 — 을 그대로 써서 이 문제를 피한다.
+    """
+    main_loop = gevent.get_hub().loop
+    async_result = gevent.event.AsyncResult()
+
+    def _on_done(fut: "asyncio.Future") -> None:
+        try:
+            value = fut.result()
+        except Exception as e:  # noqa: BLE001 - 원본 예외를 그대로 그린렛 쪽에 전달
+            main_loop.run_callback_threadsafe(async_result.set_exception, e)
+        else:
+            main_loop.run_callback_threadsafe(async_result.set, value)
+
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    future.add_done_callback(_on_done)
+    return async_result.get()
+
+
 class _AsyncMilvusSearchStore:
     """pymilvus의 AsyncMilvusClient(grpc.aio 기반)를 gevent 프로세스 안에서 쓰기 위한 래퍼.
 
@@ -116,10 +145,8 @@ class _AsyncMilvusSearchStore:
     다만 asyncio 이벤트 루프를 매 호출마다 새로 만들면(asyncio.run) 매번 채널을
     재생성하는 꼴이라 baseline 테스트가 재려는 순수 latency(L0)에 연결 비용이
     섞인다. 그래서 이벤트 루프 하나를 gevent 실제 threadpool(진짜 OS 스레드)에서
-    프로세스 생애주기 내내 돌리고(run_forever), 매 검색 요청은
-    run_coroutine_threadsafe로 그 루프에 넘긴 뒤 .result()로 대기한다 — 이
-    .result() 대기는 호출한 그린렛(메인 스레드, hub가 살아있는 쪽)에서 일어나므로
-    gevent의 정상적인 스레드-그린렛 협조 패턴과 동일하게 동작한다.
+    프로세스 생애주기 내내 돌리고(run_forever), 매 검색 요청은 _run_coro_threadsafe로
+    그 루프에 넘긴다.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -135,7 +162,7 @@ class _AsyncMilvusSearchStore:
         async def _make_client():
             return AsyncMilvusClient(**kwargs)
 
-        self._client = asyncio.run_coroutine_threadsafe(_make_client(), self._loop).result(timeout=60)
+        self._client = _run_coro_threadsafe(self._loop, _make_client())
 
     def search_one(self, collection: str, vector, top_k: int):
         vec = np.asarray(vector, dtype=np.float32)
@@ -151,7 +178,7 @@ class _AsyncMilvusSearchStore:
             )
             return [(h["entity"]["doc_id"], h["distance"]) for h in results[0]]
 
-        return asyncio.run_coroutine_threadsafe(_do(), self._loop).result()
+        return _run_coro_threadsafe(self._loop, _do())
 
 
 def build_store(cfg: Config):
