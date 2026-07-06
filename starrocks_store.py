@@ -102,10 +102,10 @@ class StarRocksStore:
     def create_collection(self, name: str, dim: int) -> None:
         self._exec(f"""
             CREATE TABLE `{name}` (
-                id     BIGINT       NOT NULL,
-                doc_id VARCHAR(512) NOT NULL,
-                text   VARCHAR({_TEXT_MAX_BYTES}),
-                vector ARRAY<FLOAT> NOT NULL,
+                `id`     BIGINT       NOT NULL,
+                `doc_id` VARCHAR(512) NOT NULL,
+                `text`   VARCHAR({_TEXT_MAX_BYTES}),
+                `vector` ARRAY<FLOAT> NOT NULL,
                 INDEX vec_idx (vector) USING VECTOR (
                     "index_type" = "hnsw",
                     "dim" = "{dim}",
