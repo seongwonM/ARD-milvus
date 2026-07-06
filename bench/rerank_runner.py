@@ -97,7 +97,7 @@ def _unique_doc_ids(candidates: dict[str, list[str]], top_n: int) -> list[str]:
 
 
 def make_precomputed_embedding_score_fn(
-    client: EmbeddingClient, candidates: dict[str, list[str]], docs: dict, top_n: int,
+    client: EmbeddingClient, candidates: dict[str, list[str]], docs: dict, top_n: int, concurrency: int,
 ) -> ScoreFn:
     """문서 벡터만 미리 한 번씩 배치 인코딩해서 캐싱한다 (쿼리는 캐싱하지 않음).
 
@@ -106,12 +106,46 @@ def make_precomputed_embedding_score_fn(
     애초에 운영 구조와 안 맞는 낭비였을 뿐이다. 반대로 쿼리까지 미리 다 모아 배치
     인코딩해버리면 "요청 1건당 API 응답 시간"이라는 벤치마크 latency/QPS의 의미 자체가
     사라지므로, 쿼리는 기존처럼 score() 호출 시점(=쿼리별 워커)에 API로 임베딩한다.
+
+    문서 인코딩은 쿼리와 달리 실시간 서빙 제약이 없는 인덱싱 단계라서, 배치 하나씩
+    순차 호출하지 않고 여러 배치를 동시에(concurrency) 흘려보내 속도를 최대로 낸다.
     """
     unique_doc_ids = _unique_doc_ids(candidates, top_n)
     doc_texts = [_doc_text(docs, d) for d in unique_doc_ids]
-    logger.info(f"  [사전 인코딩 - 문서만] 유니크 후보 문서 {len(unique_doc_ids):,}개 (실제 인덱싱 단계에 해당)")
-    doc_vecs = client.encode(doc_texts)
-    doc_vec_map = {doc_id: vec for doc_id, vec in zip(unique_doc_ids, doc_vecs)}
+    n_docs = len(doc_texts)
+    bs = client.batch_size
+    doc_id_chunks = [unique_doc_ids[i: i + bs] for i in range(0, n_docs, bs)]
+    text_chunks = [doc_texts[i: i + bs] for i in range(0, n_docs, bs)]
+    n_chunks = len(text_chunks)
+    logger.info(
+        f"  [사전 인코딩 - 문서만] 유니크 후보 문서 {n_docs:,}개, {n_chunks:,}배치(batch_size={bs}), "
+        f"concurrency={concurrency}로 동시 인코딩 (실제 인덱싱 단계에 해당)"
+    )
+
+    doc_vec_map: dict[str, np.ndarray] = {}
+    doc_vec_lock = threading.Lock()
+    progress = {"done": 0}
+    progress_lock = threading.Lock()
+    log_every = max(1, round(n_chunks * 0.05))
+    t_pre = time.time()
+
+    def encode_chunk(idx: int) -> None:
+        vecs = client.encode(text_chunks[idx], batch_size=len(text_chunks[idx]))
+        with doc_vec_lock:
+            doc_vec_map.update(zip(doc_id_chunks[idx], vecs))
+        with progress_lock:
+            progress["done"] += 1
+            done = progress["done"]
+        if done % log_every == 0 or done == n_chunks:
+            logger.info(
+                f"    문서 인코딩 진행: 배치 {done:,}/{n_chunks:,} "
+                f"(문서 약 {min(done * bs, n_docs):,}/{n_docs:,})  경과={round(time.time() - t_pre, 1)}s"
+            )
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(encode_chunk, i) for i in range(n_chunks)]
+        for fut in as_completed(futures):
+            fut.result()
 
     def score(q_text: str, cand_ids: list[str], cand_texts: list[str]) -> dict[str, float]:
         q_vec = client.encode([q_text])[0]
@@ -160,7 +194,7 @@ def run_rerank(
     if rerank_method == "embedding_cosine":
         assert isinstance(client, EmbeddingClient)
         t_pre = time.time()
-        score_fn = make_precomputed_embedding_score_fn(client, candidates, docs, top_n)
+        score_fn = make_precomputed_embedding_score_fn(client, candidates, docs, top_n, concurrency)
         precompute_sec = round(time.time() - t_pre, 2)
         logger.info(
             f"  문서 사전 인코딩 완료: {precompute_sec}s — 쿼리는 기존처럼 워커마다 API로 임베딩 "

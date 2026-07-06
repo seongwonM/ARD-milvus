@@ -67,6 +67,10 @@ class EmbeddingClient:
         """직전 이 스레드의 encode() 호출에 걸린 순수 응답 시간 합(재시도/백오프 제외)."""
         return getattr(self._local, "last_latency_sec", 0.0)
 
+    @property
+    def batch_size(self) -> int:
+        return self._config.batch_size
+
     def _wait_if_paused(self) -> float:
         """공유 쿨다운이 걸려 있으면 풀릴 때까지 대기하고, 실제로 대기한 시간(초)을 반환.
 
