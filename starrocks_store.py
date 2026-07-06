@@ -177,14 +177,14 @@ class StarRocksStore:
         """호출자(bench/retrieval_runner.py, upload())가 한 번의 INSERT SQL에
         몇 바이트어치를 모아 보낼지 결정할 때 쓰는 예산.
 
-        실제 조회한 max_allowed_packet의 절반만 쓴다(다른 세션 동시 사용,
-        헤더 오버헤드 감안한 여유분). 행 하나의 바이트 수는 추정하지 않고
-        estimate_row_bytes()가 실제 SQL 조각을 만들어 정확히 잰다 — float repr
-        길이나 escape 오버헤드를 추정치로 잡았다가 실제보다 작아서
-        max_allowed_packet을 넘겨 연결이 끊긴 적이 있어서(2026-07 실측),
-        이제는 추정 대신 실측으로 바꿨다.
+        실제 조회한 max_allowed_packet의 1/4만 쓴다. 행 하나의 바이트 수는
+        estimate_row_bytes()가 실제 SQL 조각을 만들어 정확히 재지만, 그래도
+        여유를 넉넉히 두는 이유: 이 SQL 텍스트 자체의 바이트 수 말고도 MySQL
+        프로토콜 패킷 헤더, 다른 세션의 동시 사용 등 우리가 안 재는 오버헤드가
+        더 있을 수 있다. 절반(1/2)으로는 실측치가 예산의 99.94%까지 차서(748행,
+        16,766,831B vs 예산 16,777,216B) 여유가 사실상 없었다(2026-07 실측).
         """
-        return self._max_packet_bytes // 2
+        return self._max_packet_bytes // 4
 
     def estimate_row_bytes(self, doc_id: str, text: str, vector) -> int:
         """이 행이 INSERT SQL에 실제로 차지할 바이트 수 — 정확히 그 SQL 조각을
