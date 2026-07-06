@@ -97,7 +97,7 @@ def _unique_doc_ids(candidates: dict[str, list[str]], top_n: int) -> list[str]:
 
 
 def make_precomputed_embedding_score_fn(
-    client: EmbeddingClient, candidates: dict[str, list[str]], docs: dict, top_n: int,
+    client: EmbeddingClient, candidates: dict[str, list[str]], docs: dict, top_n: int, concurrency: int,
 ) -> ScoreFn:
     """문서 벡터만 미리 한 번씩 배치 인코딩해서 캐싱한다 (쿼리는 캐싱하지 않음).
 
@@ -107,35 +107,52 @@ def make_precomputed_embedding_score_fn(
     인코딩해버리면 "요청 1건당 API 응답 시간"이라는 벤치마크 latency/QPS의 의미 자체가
     사라지므로, 쿼리는 기존처럼 score() 호출 시점(=쿼리별 워커)에 API로 임베딩한다.
 
-    문서 배치는 순차로 호출한다(retrieval_runner.py의 _build_index와 동일 패턴) — 이
-    rerank job 자체가 top_n별로 pod 5개가 STARTUP_DELAY_SEC(0/15/30/45/60s)만큼만
-    엇갈려 시작해서 이미 같은 API를 사실상 동시에 두드리는 구조다. pod 안에서까지 배치를
-    동시에(concurrency) 쏘면 서버 입장에선 부하가 이중으로 겹쳐서, 먼저 시작한 pod(top5)가
-    서버를 붙잡고 있는 동안 뒤에 시작한 pod(top10/20/50/100)가 밀리는 현상으로 이어진다.
-    pod 간 동시성만으로도 사실상 큐 역할을 하므로, pod 내부는 순차로 간다(2026-07-06).
+    문서 배치는 concurrency로 동시에 흘려보낸다 — 한때 top_n별 pod 5개를 동시에 띄우면서
+    "pod 안에서까지 동시에 쏘면 서버 부하가 이중으로 겹친다"는 이유로 순차 호출로 바꿨었는데,
+    이제 pod는 k8s/run-rerank-qwen3-sequential.ps1로 한 번에 하나씩만 실행되므로(2026-07-06)
+    그 전제가 사라졌다. pod 하나만 서버를 쓰는 상황에서 문서 배치까지 순차로 가는 건
+    불필요한 낭비라 다시 동시 처리로 되돌린다.
     """
     unique_doc_ids = _unique_doc_ids(candidates, top_n)
     doc_texts = [_doc_text(docs, d) for d in unique_doc_ids]
     n_docs = len(doc_texts)
     bs = client.batch_size
+    doc_id_chunks = [unique_doc_ids[i: i + bs] for i in range(0, n_docs, bs)]
+    text_chunks = [doc_texts[i: i + bs] for i in range(0, n_docs, bs)]
+    n_chunks = len(text_chunks)
+    # concurrency는 쿼리 처리(수천~수만 건)용 큐 크기를 그대로 재사용한 값이라, top_n이
+    # 작아 문서 배치 수가 그보다 적으면 어차피 배치 수만큼만 동시에 나간다 — 헷갈리지 않게
+    # 실제 쓰는 값을 따로 계산해서 로그에 남김.
+    doc_concurrency = min(concurrency, n_chunks) if n_chunks else 1
     logger.info(
-        f"  [사전 인코딩 - 문서만] 유니크 후보 문서 {n_docs:,}개, batch_size={bs} "
-        f"(순차 호출 — pod 간 동시성만으로 충분, 실제 인덱싱 단계에 해당)"
+        f"  [사전 인코딩 - 문서만] 유니크 후보 문서 {n_docs:,}개, {n_chunks:,}배치(batch_size={bs}), "
+        f"동시 요청={doc_concurrency}(설정 concurrency={concurrency}) — pod 1개만 서버를 쓰므로 동시 처리"
     )
 
     doc_vec_map: dict[str, np.ndarray] = {}
+    doc_vec_lock = threading.Lock()
+    progress = {"done": 0}
+    progress_lock = threading.Lock()
+    log_every = max(1, round(n_chunks * 0.05))
     t_pre = time.time()
-    for batch_idx, start in enumerate(range(0, n_docs, bs)):
-        batch_ids = unique_doc_ids[start: start + bs]
-        batch_texts = doc_texts[start: start + bs]
-        t_batch = time.time()
-        vecs = client.encode(batch_texts, batch_size=len(batch_texts))
-        doc_vec_map.update(zip(batch_ids, vecs))
-        done = min(start + bs, n_docs)
-        logger.info(
-            f"    [문서 배치 {batch_idx}] {done:,}/{n_docs:,}  배치소요={round(time.time() - t_batch, 1)}s  "
-            f"누적경과={round(time.time() - t_pre, 1)}s"
-        )
+
+    def encode_chunk(idx: int) -> None:
+        vecs = client.encode(text_chunks[idx], batch_size=len(text_chunks[idx]))
+        with doc_vec_lock:
+            doc_vec_map.update(zip(doc_id_chunks[idx], vecs))
+        with progress_lock:
+            progress["done"] += 1
+            done = progress["done"]
+        if done % log_every == 0 or done == n_chunks:
+            logger.info(
+                f"    문서 인코딩 진행: 배치 {done:,}/{n_chunks:,} "
+                f"(문서 약 {min(done * bs, n_docs):,}/{n_docs:,})  경과={round(time.time() - t_pre, 1)}s"
+            )
+
+    with ThreadPoolExecutor(max_workers=doc_concurrency) as executor:
+        futures = [executor.submit(encode_chunk, i) for i in range(n_chunks)]
+        for fut in as_completed(futures):
+            fut.result()
 
     def score(q_text: str, cand_ids: list[str], cand_texts: list[str]) -> dict[str, float]:
         q_vec = client.encode([q_text])[0]
@@ -184,7 +201,7 @@ def run_rerank(
     if rerank_method == "embedding_cosine":
         assert isinstance(client, EmbeddingClient)
         t_pre = time.time()
-        score_fn = make_precomputed_embedding_score_fn(client, candidates, docs, top_n)
+        score_fn = make_precomputed_embedding_score_fn(client, candidates, docs, top_n, concurrency)
         precompute_sec = round(time.time() - t_pre, 2)
         logger.info(
             f"  문서 사전 인코딩 완료: {precompute_sec}s — 쿼리는 기존처럼 워커마다 API로 임베딩 "
