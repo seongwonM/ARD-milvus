@@ -5,8 +5,12 @@
 # 단일 Pod 구성과 그림을 맞추기 위해 이걸 골랐다 (실제 운영 클러스터는 보통 FE/BE를
 # 분리하지만, 이건 순수 비교용 최소 구성).
 #
-# 리소스 requests/limits를 loadtest/k8s/milvus.yaml과 동일하게 맞춰서 두 백엔드가
-# 같은 자원으로 공정하게 비교되도록 했다.
+# 리소스는 원래 loadtest/k8s/milvus.yaml과 동일하게(공정 비교 목적) 맞췄었으나, 그
+# 사양(4Gi/8Gi)으로는 insert 도중 BE가 OOMKilled됐다(2026-07 실측, k8s/starrocks.yaml에서
+# 먼저 확인됨). StarRocks 공식 최소 권장 사양은 8vCPU/32GB이고, allin1(FE+BE 한 컨테이너)
+# 구성은 컨테이너 cgroup 메모리 감지가 부정확한 것으로 알려진 이슈도 있어(StarRocks#67607)
+# 작은 컨테이너에서 특히 취약하다. 8Gi/16Gi로 올렸다 — Milvus와의 리소스 대칭은 깨지지만,
+# 애초에 "같은 리소스로 공정 비교" 자체가 StarRocks엔 안 맞았던 전제였다는 뜻이기도 하다.
 #
 # 벡터 인덱스(HNSW)는 StarRocks 3.4+에서만 지원 — 3.5.19(안정 버전) 사용.
 # FE의 enable_experimental_vector 설정은 starrocks_store.py가 접속 시 자동으로 켠다.
@@ -36,10 +40,10 @@ spec:
       resources:
         requests:
           cpu: "1"
-          memory: "4Gi"
+          memory: "8Gi"
         limits:
           cpu: "4"
-          memory: "8Gi"
+          memory: "16Gi"
       readinessProbe:
         # allin1 이미지는 FE 메타데이터 초기화 + BE 등록까지 컨테이너 시작 후 수십 초
         # 걸릴 수 있어서, 쿼리 포트(9030)가 실제로 리스닝하는지로 Ready 여부를 판단한다.
