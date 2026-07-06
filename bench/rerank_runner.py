@@ -133,9 +133,17 @@ def make_precomputed_embedding_score_fn(
     progress_lock = threading.Lock()
     log_every = max(1, round(n_chunks * 0.05))
     t_pre = time.time()
+    _DOC_SAMPLE = 10  # 앞 배치 몇 개만 시작/종료 시각을 남겨서 "동시에 보낸 게 실제로 겹치는지,
+    # 아니면 서버가 순차 처리해서 응답이 하나씩 돌아오는지"를 로그만 보고 바로 판단할 수 있게 함.
 
     def encode_chunk(idx: int) -> None:
+        t_start = round(time.time() - t_pre, 1)
+        if idx < _DOC_SAMPLE:
+            logger.info(f"    [배치 {idx} 요청 시작] t={t_start}s")
         vecs = client.encode(text_chunks[idx], batch_size=len(text_chunks[idx]))
+        t_end = round(time.time() - t_pre, 1)
+        if idx < _DOC_SAMPLE:
+            logger.info(f"    [배치 {idx} 응답 완료] t={t_end}s (소요 {round(t_end - t_start, 1)}s)")
         with doc_vec_lock:
             doc_vec_map.update(zip(doc_id_chunks[idx], vecs))
         with progress_lock:

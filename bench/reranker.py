@@ -86,15 +86,20 @@ class RerankClient:
         랜덤 지터를 한 번 더 둬서 재개 시각 자체를 흩뜨린다.
         """
         waited = 0.0
+        was_paused = False
         while True:
             with self._retry_lock:
                 remaining = self._paused_until - time.monotonic()
             if remaining <= 0:
-                jitter = random.uniform(0, _RESUME_JITTER_SEC)
-                if jitter > 0:
-                    time.sleep(jitter)
-                    waited += jitter
+                # 실제로 쿨다운을 기다린 뒤에만 재개 지터를 준다 — 애초에 쿨다운이 걸린 적
+                # 없으면(정상 상황) 매 호출마다 불필요하게 0~1s를 태우면 안 되기 때문.
+                if was_paused:
+                    jitter = random.uniform(0, _RESUME_JITTER_SEC)
+                    if jitter > 0:
+                        time.sleep(jitter)
+                        waited += jitter
                 return waited
+            was_paused = True
             time.sleep(remaining)
             waited += remaining
 
