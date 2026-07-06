@@ -27,7 +27,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: ard-milvus
-      image: ghcr.io/seongwonm/ard-milvus:2a9491e775953e3ae1839dbbfa5ece2bca14a1ad
+      image: ghcr.io/seongwonm/ard-milvus:9af767611b04b4a45a17cee04d3dd3b38bb0e12a
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
       env:
