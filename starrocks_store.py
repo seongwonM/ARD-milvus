@@ -49,11 +49,10 @@ class StarRocksStore:
     ) -> None:
         import pymysql
 
+        self._pymysql = pymysql
+        self._host, self._port, self._user, self._password = host, port, user, password
         self._database = database
-        self._conn = pymysql.connect(
-            host=host, port=port, user=user, password=password,
-            autocommit=True, connect_timeout=300, read_timeout=300, write_timeout=300,
-        )
+        self._connect()
         # allin1 이미지는 쿼리 포트(9030)가 열려도 FE가 DDL을 처리할 준비(리더 선출 등)가
         # 조금 더 걸릴 수 있어서, 최초 연결 직후의 DDL만 짧게 재시도한다.
         self._exec_with_retry(f"CREATE DATABASE IF NOT EXISTS `{database}`")
@@ -76,6 +75,35 @@ class StarRocksStore:
 
         logger.info(f"[StarRocks] 연결: {host}:{port}/{database} (max_allowed_packet={self._max_packet_bytes:,}B)")
 
+    def _connect(self) -> None:
+        self._conn = self._pymysql.connect(
+            host=self._host, port=self._port, user=self._user, password=self._password,
+            autocommit=True, connect_timeout=300, read_timeout=300, write_timeout=300,
+        )
+
+    def _is_connection_error(self, exc: Exception) -> bool:
+        """커넥션 자체가 죽어서 그냥 재시도해봐야 소용없고 재연결이 필요한 경우인지 판별.
+
+        max_allowed_packet 초과 등으로 서버가 소켓을 끊으면, 같은 커넥션으로 재시도할 때
+        원래 에러(packet too large 등) 대신 pymysql.err.InterfaceError(0, '')처럼 애매한
+        에러만 반복돼서 원인이 가려진다(2026-07 실측) — 이럴 땐 재시도 전에 재연결해야 한다.
+        """
+        if isinstance(exc, self._pymysql.err.InterfaceError):
+            return True
+        if isinstance(exc, self._pymysql.err.OperationalError):
+            code = exc.args[0] if exc.args else None
+            return code in (2006, 2013, 2014)  # gone away / lost connection / commands out of sync
+        return False
+
+    def _reconnect(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+        self._connect()
+        self._exec(f"USE `{self._database}`")
+        logger.warning("[StarRocks] 재연결 완료")
+
     def _exec(self, sql: str):
         with self._conn.cursor() as cur:
             cur.execute(sql)
@@ -86,9 +114,17 @@ class StarRocksStore:
             try:
                 return self._exec(sql)
             except Exception as exc:
+                logger.warning(
+                    f"[StarRocks] 초기화 쿼리 실패(시도 {attempt + 1}/{attempts}, FE 초기화 중일 수 있음): "
+                    f"{type(exc).__name__}: {exc}"
+                )
                 if attempt == attempts - 1:
                     raise
-                logger.warning(f"[StarRocks] 초기화 쿼리 실패(FE 초기화 중일 수 있음), {wait_sec}s 후 재시도: {exc}")
+                if self._is_connection_error(exc):
+                    try:
+                        self._reconnect()
+                    except Exception as reconnect_exc:
+                        logger.warning(f"[StarRocks] 재연결 실패: {reconnect_exc}")
                 time.sleep(wait_sec)
 
     def _fetchall(self, sql: str):
@@ -196,11 +232,18 @@ class StarRocksStore:
                 self._exec(sql)
                 return
             except Exception as exc:
+                logger.warning(
+                    f"  insert 실패(시도 {attempt + 1}/3, {len(batch)}행, "
+                    f"{len(sql.encode('utf-8')):,}B): {type(exc).__name__}: {exc}"
+                )
                 if attempt == 2:
                     raise
-                wait = 2 ** attempt
-                logger.warning(f"  insert 실패, {wait}s 후 재시도: {exc}")
-                time.sleep(wait)
+                if self._is_connection_error(exc):
+                    try:
+                        self._reconnect()
+                    except Exception as reconnect_exc:
+                        logger.warning(f"  재연결 실패: {reconnect_exc}")
+                time.sleep(2 ** attempt)
 
     def finalize(self, name: str) -> None:
         # StarRocks는 Milvus처럼 별도 load_collection 단계가 없음 — INSERT가 커밋되면
