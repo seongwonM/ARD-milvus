@@ -155,7 +155,7 @@ class StarRocksStore:
             f"{self._conn.escape(row['text'])}, {_vec_literal(row['vector'])})"
             for row in batch
         )
-        sql = f"INSERT INTO `{name}` (id, doc_id, text, vector) VALUES {rows_sql}"
+        sql = f"INSERT INTO `{name}` (`id`, `doc_id`, `text`, `vector`) VALUES {rows_sql}"
         for attempt in range(3):
             try:
                 self._exec(sql)
@@ -186,7 +186,7 @@ class StarRocksStore:
     def _search_single(self, name: str, vector, top_k: int) -> list[tuple[str, float]]:
         lit = _vec_literal(vector)
         sql = (
-            f"SELECT doc_id, approx_cosine_similarity({lit}, vector) AS score "
+            f"SELECT `doc_id`, approx_cosine_similarity({lit}, vector) AS score "
             f"FROM `{name}` "
             f"ORDER BY approx_cosine_similarity({lit}, vector) DESC "
             f"LIMIT {int(top_k)}"
