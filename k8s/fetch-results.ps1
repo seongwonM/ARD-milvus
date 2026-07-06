@@ -10,11 +10,12 @@
 
 .EXAMPLE
   ./k8s/fetch-results.ps1 -Stage retrieval
+  ./k8s/fetch-results.ps1 -Stage retrieval-starrocks
   ./k8s/fetch-results.ps1 -Stage rerank
   ./k8s/fetch-results.ps1 -Stage all
 #>
 param(
-    [ValidateSet("retrieval", "rerank", "all")]
+    [ValidateSet("retrieval", "retrieval-starrocks", "rerank", "all")]
     [string]$Stage = "all",
     [string]$OutDir = "results",
     [string]$Namespace = "user-x0179564",
@@ -58,6 +59,14 @@ Ensure-DebugPod
 if ($Stage -eq "retrieval" -or $Stage -eq "all") {
     foreach ($job in @("bench-retrieval-hcp", "bench-retrieval-m3", "bench-retrieval-qwen3")) {
         Wait-AndFetch -JobName $job -RemotePath "/results/retrieval" -LocalPath "$OutDir\retrieval"
+    }
+}
+
+if ($Stage -eq "retrieval-starrocks" -or $Stage -eq "all") {
+    # k8s/bench-jobs-starrocks.yaml Job들. 결과는 별도 경로(/results/retrieval-starrocks)에 저장됨
+    # (Milvus 쪽 /results/retrieval과 파일명이 겹치지 않도록).
+    foreach ($job in @("bench-retrieval-hcp-starrocks", "bench-retrieval-m3-starrocks", "bench-retrieval-qwen3-starrocks")) {
+        Wait-AndFetch -JobName $job -RemotePath "/results/retrieval-starrocks" -LocalPath "$OutDir\retrieval-starrocks"
     }
 }
 
