@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -93,17 +94,79 @@ class QueryCursor:
         return i
 
 
-def build_store(cfg: Config):
-    """VECTOR_BACKEND(milvus|starrocks)에 따라 알맞은 store를 만든다 (store_factory.py).
+def _run_loop_forever(loop: asyncio.AbstractEventLoop) -> None:
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
 
-    gevent 내장 threadpool(진짜 OS 스레드)에서 생성한다 — MilvusClient 생성자가
-    내부적으로 서버와 동기 gRPC handshake를 할 수 있는데, 이걸 그린렛에서 직접
-    호출하면 threadpool_search_one과 똑같은 이유로 이벤트 루프 전체가 멈출 수
-    있다(연결 시점이라 search_one을 아무리 잘 감싸도 소용없음). 그래서 store
-    생성 자체도 항상 threadpool을 거친다.
+
+class _AsyncMilvusSearchStore:
+    """pymilvus의 AsyncMilvusClient(grpc.aio 기반)를 gevent 프로세스 안에서 쓰기 위한 래퍼.
+
+    동기 MilvusClient는 grpc의 동기(blocking) C-core 경로를 타는데, 이건 Locust가
+    걸어둔 gevent monkey-patch와 근본적으로 안 맞아서 생성 시점부터 hang한다
+    (2026-07 실측 — threadpool로 감싸도 소용없었음: MilvusClient 생성자 자체가
+    내부에서 만드는 백그라운드 소켓/스레드가 이미 monkey-patch된 상태라 이걸
+    처리해줄 이벤트 루프가 없는 채로 멈춰버림). grpc.experimental.gevent.init_gevent()도
+    시도했으나 2019~2020년대 grpcio(1.1x~1.2x)에서만 검증된 기능이라 그 이후 grpc
+    내부 스레딩 모델 변화를 못 따라가 최신 grpcio에서는 오히려 RuntimeError
+    (greenlet is being finalized)로 깨짐 — Python 3.12 wheel도 없는 옛날 grpcio라
+    다운그레이드도 불가능.
+
+    대신 AsyncMilvusClient(grpc.aio, 진짜 asyncio)는 이 충돌 자체가 없다(실측 확인됨).
+    다만 asyncio 이벤트 루프를 매 호출마다 새로 만들면(asyncio.run) 매번 채널을
+    재생성하는 꼴이라 baseline 테스트가 재려는 순수 latency(L0)에 연결 비용이
+    섞인다. 그래서 이벤트 루프 하나를 gevent 실제 threadpool(진짜 OS 스레드)에서
+    프로세스 생애주기 내내 돌리고(run_forever), 매 검색 요청은
+    run_coroutine_threadsafe로 그 루프에 넘긴 뒤 .result()로 대기한다 — 이
+    .result() 대기는 호출한 그린렛(메인 스레드, hub가 살아있는 쪽)에서 일어나므로
+    gevent의 정상적인 스레드-그린렛 협조 패턴과 동일하게 동작한다.
+    """
+
+    def __init__(self, cfg: Config) -> None:
+        from pymilvus import AsyncMilvusClient
+
+        self._loop = asyncio.new_event_loop()
+        gevent.get_hub().threadpool.spawn(_run_loop_forever, self._loop)
+
+        kwargs: dict = {"uri": cfg.milvus.uri, "timeout": 300}
+        if cfg.milvus.token:
+            kwargs["token"] = cfg.milvus.token
+
+        async def _make_client():
+            return AsyncMilvusClient(**kwargs)
+
+        self._client = asyncio.run_coroutine_threadsafe(_make_client(), self._loop).result(timeout=60)
+
+    def search_one(self, collection: str, vector, top_k: int):
+        vec = np.asarray(vector, dtype=np.float32)
+
+        async def _do():
+            results = await self._client.search(
+                collection_name=collection,
+                data=[vec.tolist()],
+                anns_field="vector",
+                search_params={"metric_type": "COSINE", "params": {"ef": 100}},
+                limit=top_k,
+                output_fields=["doc_id"],
+            )
+            return [(h["entity"]["doc_id"], h["distance"]) for h in results[0]]
+
+        return asyncio.run_coroutine_threadsafe(_do(), self._loop).result()
+
+
+def build_store(cfg: Config):
+    """VECTOR_BACKEND(milvus|starrocks)에 따라 알맞은 store를 만든다.
+
+    milvus는 _AsyncMilvusSearchStore(grpc.aio 기반, 위 docstring 참고)를 쓴다.
+    starrocks는 pymysql 기반이라 gevent monkey-patch와 충돌하는 지점이 없어
+    기존처럼 store_factory.build_store를 gevent threadpool(진짜 OS 스레드)에서
+    그대로 호출한다.
     """
     _debug(f"build_store 시작 (backend={cfg.backend})")
-    result = gevent.get_hub().threadpool.apply(_build_store, (cfg,))
+    if cfg.backend == "milvus":
+        result = _AsyncMilvusSearchStore(cfg)
+    else:
+        result = gevent.get_hub().threadpool.apply(_build_store, (cfg,))
     _debug("build_store 완료")
     return result
 
@@ -112,19 +175,23 @@ _first_search_logged = False
 
 
 def threadpool_search_one(store, collection: str, vector, top_k: int):
-    """store.search_one을 gevent 내장 threadpool(진짜 OS 스레드)에서 실행한다.
+    """store.search_one을 실행한다.
 
-    pymilvus는 동기 gRPC(grpcio C-core)를 쓰는데, 이는 gevent monkey-patch와
-    협조하지 않는다 — 그린렛에서 직접 호출하면 이 블로킹 호출이 프로세스의
-    유일한 이벤트 루프 자체를 통째로 멈춰서(타임아웃도 안 걸리고 무한 hang),
-    Locust 프로세스가 아예 응답 없이 멈춰버린다. 실제 OS 스레드로 넘기면
-    호출한 그린렛만 대기하고 이벤트 루프(run-time 타이머 등)는 계속 돈다.
+    _AsyncMilvusSearchStore는 내부적으로 이미 전용 백그라운드 스레드(asyncio 루프)로
+    작업을 넘기므로 여기서 다시 threadpool로 감싸지 않는다(감싸면 그 real thread
+    안에서 concurrent.futures.Future.result()를 기다리게 되는데, 그 스레드엔 이걸
+    처리할 gevent hub가 없어 또 hang한다 — 그래서 이 대기는 반드시 hub가 살아있는
+    메인 그린렛에서 일어나야 한다). starrocks(pymysql, 동기 blocking)는 여전히
+    threadpool로 감싸서 이벤트 루프가 멈추지 않게 한다.
     """
     global _first_search_logged
     first = not _first_search_logged
     if first:
         _debug("첫 search_one 시작")
-    result = gevent.get_hub().threadpool.apply(store.search_one, (collection, vector), {"top_k": top_k})
+    if isinstance(store, _AsyncMilvusSearchStore):
+        result = store.search_one(collection, vector, top_k)
+    else:
+        result = gevent.get_hub().threadpool.apply(store.search_one, (collection, vector), {"top_k": top_k})
     if first:
         _debug("첫 search_one 완료")
         _first_search_logged = True
