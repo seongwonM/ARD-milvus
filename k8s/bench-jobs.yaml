@@ -1,6 +1,7 @@
 # Retrieval 3모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) 벤치마크 Job.
 # (CI 재트리거용 사소한 주석 변경 — 기능 변화 없음)
-# Reranking은 k8s/rerank-job-bge.yaml, k8s/rerank-job-qwen3.yaml — 이 Job들이 모두 끝난 뒤 별도 적용하세요.
+# Reranking은 k8s/rerank-job-bge.yaml, k8s/rerank-job-qwen3-top{5,10,20,50,100}.yaml(순차 실행은
+# ./k8s/run-rerank-qwen3-sequential.ps1) — 이 Job들이 모두 끝난 뒤 별도 적용하세요.
 # Secret: milvus-migration-secret (EMBEDDING_API_ENDPOINT, EMBEDDING_API_KEY, MILVUS_TOKEN)
 #
 # PVC(bench-results)는 k8s/bench-results-pvc.yaml로 분리되어 있습니다 — retrieval/rerank Job이

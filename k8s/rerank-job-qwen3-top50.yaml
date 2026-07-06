@@ -1,0 +1,64 @@
+# Reranking Job — Qwen3-Embedding-8B, top_n=50 (embedding_cosine 방식).
+# 자세한 설명은 k8s/rerank-job-qwen3-top5.yaml 상단 주석 참고.
+# top_n이 커질수록 유니크 후보 문서(문서 벡터 캐시)가 늘어날 수 있어 top5/10/20보다
+# 메모리 여유를 조금 더 둠.
+#
+# 단독 실행: kubectl apply -f k8s/rerank-job-qwen3-top50.yaml
+# 전체 순차 실행: ./k8s/run-rerank-qwen3-sequential.ps1
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-rerank-qwen3-top50
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: ghcr.io/seongwonm/ard-milvus:a4780e15b6275a64c41cf30774b02c37d5f302f3
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              python -m milvus_migration.bench.rerank_runner \
+                --retrieval-result \
+                  /results/retrieval/hcp_llm_latest_top100.json \
+                  /results/retrieval/bge_m3_top100.json \
+                --embedding-rerank-model Qwen3-Embedding-8B \
+                --top-n 50 \
+                --data-root /data \
+                --out /results/rerank
+          env:
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0"
+            - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
+              value: "16"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "256"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+          volumeMounts:
+            - name: bench-results
+              mountPath: /results
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1.5Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+      volumes:
+        - name: bench-results
+          persistentVolumeClaim:
+            claimName: bench-results

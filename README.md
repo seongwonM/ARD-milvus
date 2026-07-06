@@ -192,11 +192,12 @@ python -m milvus_migration.bench.rerank_runner \
 - `k8s/bench-jobs.yaml` — retrieval 3개 모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) Job.
   각 Job의 `REINDEX` env 값을 `"true"`로 바꾸면(Job은 재적용 전 delete 필요) 인덱스가 있어도 강제로
   재색인해서 인덱싱 속도를 다시 측정합니다 (기본값 `"false"` — 있으면 재사용).
-- `k8s/rerank-job-bge.yaml`, `k8s/rerank-job-qwen3.yaml` — retrieval Job들이 끝난 뒤 적용하는
-  reranking Job. 리랭커(bge/qwen3)별로 파일과 Job(pod)을 분리해 5개씩 나눠 돌립니다 —
-  10개를 한 파일에서 동시에 띄우면 리소스 여유가 빠듯해서, bge 파일을 먼저 적용해 완료를
-  확인한 뒤 qwen3 파일을 적용하는 걸 권장합니다. retrieval 없이 로컬 top100 결과만으로
-  돌리는 방법은 각 파일 헤더의 "PVC 준비" 절 참고.
+- `k8s/rerank-job-bge.yaml`, `k8s/rerank-job-qwen3-top{5,10,20,50,100}.yaml` — retrieval Job들이
+  끝난 뒤 적용하는 reranking Job. top_n(5/10/20/50/100)별로 Job(pod)을 분리합니다. bge는
+  5개를 동시에 적용해도 되지만, qwen3는 `./k8s/run-rerank-qwen3-sequential.ps1`로 하나씩
+  순서대로 실행해야 합니다(2026-07-06) — 5개를 동시에 띄우면 서로 같은 API를 두들겨 밀리고
+  코퍼스/retrieval JSON이 pod마다 중복으로 메모리에 올라가 OOM이 났습니다. retrieval 없이
+  로컬 top100 결과만으로 돌리는 방법은 각 파일 헤더의 "PVC 준비" 절 참고.
 - `k8s/pod.yaml` — 수동 디버그용 Pod (`kubectl exec`로 들어가 직접 실행). `bench-results` PVC를
   마운트한 채 계속 떠있어서, `fetch-results.ps1`이 이 pod를 PVC 읽기 통로로도 사용하고,
   로컬 top100 결과를 PVC에 주입할 때도 `kubectl cp`의 대상으로 씁니다
@@ -240,8 +241,9 @@ milvus_migration/
 │   ├── bench-results-pvc.yaml  # 결과 공유용 PVC(ReadWriteMany) — retrieval/rerank Job 공용
 │   ├── bench-jobs.yaml    # retrieval Job × 3 — Milvus
 │   ├── bench-jobs-starrocks.yaml  # 동일 retrieval Job × 3 — StarRocks
-│   ├── rerank-job-bge.yaml    # reranking Job — bge-reranker-v2-m3 (5개)
-│   ├── rerank-job-qwen3.yaml  # reranking Job — Qwen3-Embedding-8B (5개)
+│   ├── rerank-job-bge.yaml    # reranking Job — bge-reranker-v2-m3 (top_n별 5개, 동시 적용 가능)
+│   ├── rerank-job-qwen3-top{5,10,20,50,100}.yaml  # reranking Job — Qwen3-Embedding-8B (top_n별 5개)
+│   ├── run-rerank-qwen3-sequential.ps1  # qwen3 rerank Job 5개를 순서대로 하나씩 실행
 │   ├── pod.yaml           # 디버그용 Pod
 │   └── fetch-results.ps1  # 결과 로컬 자동 복사 스크립트
 ├── requirements.txt

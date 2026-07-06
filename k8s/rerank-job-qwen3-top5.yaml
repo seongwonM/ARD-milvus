@@ -1,0 +1,73 @@
+# Reranking Job — Qwen3-Embedding-8B, top_n=5 (embedding_cosine 방식).
+# k8s/rerank-job-qwen3-top{5,10,20,50,100}.yaml 5개 파일 + k8s/run-rerank-qwen3-sequential.ps1로
+# 나뉘어 있습니다 — top_n마다 파드를 따로 띄우되(속도 측정을 top_n별로 격리하기 위해,
+# k8s/rerank-job-bge.yaml과 같은 이유), 5개를 동시에 띄우지는 않고 스크립트가 하나씩
+# 순서대로 적용 → 완료 대기 → 삭제 → 다음 top_n 적용을 반복합니다(2026-07-06).
+#
+# 예전엔 5개를 한 파일에 넣고 STARTUP_DELAY_SEC(0/15/30/45/60s)로 살짝만 엇갈려서 동시에
+# 띄웠는데, 그러면 사실상 5개가 같은 API를 동시에 두드리는 거라 먼저 시작한 pod가 서버를
+# 붙잡는 동안 뒤 pod가 밀리고, 코퍼스+retrieval JSON을 pod마다 중복으로 메모리에 올려서
+# OOM까지 겹쳤다. pod 하나로 합쳐서 --top-n에 5개 값을 한 번에 넘기는 것도 시도했지만,
+# 그러면 뒤 top_n일수록 캐시/서버 상태가 누적된 영향인지 top_n 자체의 속도 차이인지
+# 구분이 안 돼서 애초에 top_n별로 pod를 격리했던 이유(k8s/rerank-job-bge.yaml 주석 참고)가
+# 무너진다 — 그래서 pod는 여전히 분리하되, 실행만 순차로 바꿨다.
+#
+# 단독 실행: kubectl apply -f k8s/rerank-job-qwen3-top5.yaml
+# 전체 순차 실행: ./k8s/run-rerank-qwen3-sequential.ps1
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-rerank-qwen3-top5
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: ghcr.io/seongwonm/ard-milvus:a4780e15b6275a64c41cf30774b02c37d5f302f3
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              python -m milvus_migration.bench.rerank_runner \
+                --retrieval-result \
+                  /results/retrieval/hcp_llm_latest_top100.json \
+                  /results/retrieval/bge_m3_top100.json \
+                --embedding-rerank-model Qwen3-Embedding-8B \
+                --top-n 5 \
+                --data-root /data \
+                --out /results/rerank
+          env:
+            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
+              value: "0"
+            - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
+              value: "16"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "256"
+            - name: EMBEDDING_TIMEOUT
+              value: "300"
+            - name: EMBEDDING_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_ENDPOINT
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: milvus-migration-secret
+                  key: EMBEDDING_API_KEY
+          volumeMounts:
+            - name: bench-results
+              mountPath: /results
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "3Gi"
+      volumes:
+        - name: bench-results
+          persistentVolumeClaim:
+            claimName: bench-results

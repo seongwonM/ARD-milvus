@@ -2,7 +2,8 @@
 # PVC(bench-results)에 /results/retrieval/*.json (retrieval top100 결과)이 이미 있어야
 # 합니다 — retrieval Job 3개(k8s/bench-jobs.yaml)를 돌려서 채우거나, 로컬에 이미 있는
 # top100 결과를 아래 "PVC 준비" 방법으로 직접 주입하세요.
-# 리랭커별로 파일을 분리했습니다(bge: 이 파일, qwen3: k8s/rerank-job-qwen3.yaml) —
+# 리랭커별로 파일을 분리했습니다(bge: 이 파일, qwen3: k8s/rerank-job-qwen3-top{5,10,20,50,100}.yaml,
+# ./k8s/run-rerank-qwen3-sequential.ps1로 순차 실행) —
 # 모델 하나당 5개(top_n=5/10/20/50/100) Job만 동시에 뜨게 해서 리소스 여유를 두기 위함.
 # top_n마다도 Job(pod)을 분리했습니다 — top_n을 한 pod에서 순차로 돌리면 뒤 top_n일수록
 # 느려지는지(캐시/스로틀링 등) top_n 자체의 속도 차이인지 구분이 안 돼서, top_n별로도
@@ -30,8 +31,8 @@
 # 리소스: rerank_runner.py가 순차 호출 대신 큐(워커 풀)로 동시에 여러 요청을 흘려보내도록
 # 바뀌면서 pod당 request 512Mi/limit 1.5Gi로 올림(원래는 256Mi대였음).
 # 이 파일 5개 Job 동시 적용 기준 합계 = request 2.5Gi / limit 7.5Gi, cpu request 1.25 / limit 5.
-# k8s/rerank-job-qwen3.yaml과 동시에 적용해도(원래 10개 Job 한 번에 띄우는 것과 같음) 크게
-# 빠듯하지 않지만, 그래도 bge 파일 먼저 적용해 완료를 확인한 뒤 qwen3 파일을 적용하는 걸 권장.
+# qwen3는 더 이상 5개를 동시에 안 띄우고 ./k8s/run-rerank-qwen3-sequential.ps1로 하나씩
+# 순차 실행하므로(2026-07-06), 이 파일(bge 5개)과 동시에 적용해도 리소스 부담이 적음.
 #
 # RERANK_CONCURRENCY: 큐로 동시에 흘려보낼 요청 수. QPS는 총 소요시간이 아니라 API 응답
 # latency로부터 역산하므로(Little's Law: qps = concurrency / 평균응답시간) 이 값을 올려도
