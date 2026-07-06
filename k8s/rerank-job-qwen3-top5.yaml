@@ -25,7 +25,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:8b287cf138f1b02deb99c30e4c176ab2ffa1677f
+          image: ghcr.io/seongwonm/ard-milvus:63310a9330fdf7b8980bed877fc49bc502fcec76
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
