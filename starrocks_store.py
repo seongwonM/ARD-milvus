@@ -9,7 +9,8 @@ Pipeline/retrieval_runner/loadtest 쪽 코드가 백엔드 차이를 신경 쓰�
   id      BIGINT
   doc_id  VARCHAR(512)
   text    VARCHAR(2048)
-  vector  ARRAY<FLOAT> + VECTOR INDEX(HNSW, cosine_similarity)
+  vector  ARRAY<FLOAT> + VECTOR INDEX(HNSW, cosine_similarity) — 인덱스는 적재 완료 후
+          finalize()에서 ALTER TABLE로 한 번에 추가한다(create_collection()엔 없음).
 
 주의(StarRocks 문서 기준, 2026-07 확인):
 - 벡터 인덱스는 v3.4+ shared-nothing 클러스터에서만 지원 (starrocks/allin1-ubuntu:3.5.x 이상 사용).
@@ -17,6 +18,10 @@ Pipeline/retrieval_runner/loadtest 쪽 코드가 백엔드 차이를 신경 쓰�
 - ANN 검색은 Milvus처럼 여러 쿼리 벡터를 한 번에 묶어 보낼 수 없고, 쿼리 벡터 1개당
   SQL 1건이 필요하다 — search()는 벡터별로 순차 쿼리한다 (배치 API가 없는 게 아니라
   StarRocks ANN 문법 자체가 상수 벡터 1개 기준이라 구조적으로 그렇다).
+- 인덱스를 CREATE TABLE 시점에 걸어두고 계속 INSERT하면, compaction이 매번 HNSW 인덱스도
+  다시 빌드해야 해서 INSERT 속도를 못 따라가 tablet에 버전이 쌓이고 결국 쓰기가 거부되거나
+  (StarRocks#56697 "too many versions") BE가 죽어 커넥션이 끊긴다(2026-07 실측) — 그래서
+  적재 중엔 인덱스 없이 넣고 finalize()에서 한 번만 빌드한다.
 """
 from __future__ import annotations
 
@@ -52,6 +57,7 @@ class StarRocksStore:
         self._pymysql = pymysql
         self._host, self._port, self._user, self._password = host, port, user, password
         self._database = database
+        self._pending_index_dim: dict[str, int] = {}  # create_collection()이 채우고 finalize()가 씀
         self._connect()
         # allin1 이미지는 쿼리 포트(9030)가 열려도 FE가 DDL을 처리할 준비(리더 선출 등)가
         # 조금 더 걸릴 수 있어서, 최초 연결 직후의 DDL만 짧게 재시도한다.
@@ -146,26 +152,29 @@ class StarRocksStore:
         return int(rows[0][0])
 
     def create_collection(self, name: str, dim: int) -> None:
+        """벡터 인덱스는 여기서 안 만든다 — finalize()가 적재를 다 끝낸 뒤 한 번에 만든다.
+
+        처음부터 INDEX ... USING VECTOR를 걸어두면 매 INSERT마다 compaction이
+        HNSW 인덱스까지 다시 빌드해야 해서 훨씬 느려지고, insert가 그보다 빠르면
+        tablet에 버전이 쌓여 결국 쓰기가 거부되거나(StarRocks#56697 "too many
+        versions") BE가 리소스 부족으로 죽어 커넥션이 끊긴다(2026-07 실측:
+        Lost connection to MySQL server during query). 적재 중엔 인덱스 없이
+        빠르게 넣고, 다 넣은 뒤 ALTER TABLE로 인덱스를 한 번만 빌드하면 이 문제가
+        없다.
+        """
         self._exec(f"""
             CREATE TABLE `{name}` (
                 `id`     BIGINT       NOT NULL,
                 `doc_id` VARCHAR(512) NOT NULL,
                 `text`   VARCHAR({_TEXT_MAX_BYTES}),
-                `vector` ARRAY<FLOAT> NOT NULL,
-                INDEX vec_idx (vector) USING VECTOR (
-                    "index_type" = "hnsw",
-                    "dim" = "{dim}",
-                    "metric_type" = "cosine_similarity",
-                    "is_vector_normed" = "false",
-                    "M" = "16",
-                    "efconstruction" = "100"
-                )
+                `vector` ARRAY<FLOAT> NOT NULL
             ) ENGINE=OLAP
             DUPLICATE KEY(id)
             DISTRIBUTED BY HASH(id) BUCKETS 4
             PROPERTIES ("replication_num" = "1")
         """)
-        logger.info(f"  테이블 생성: {name}  dim={dim}")
+        self._pending_index_dim[name] = dim
+        logger.info(f"  테이블 생성(벡터 인덱스는 적재 후 별도 빌드): {name}  dim={dim}")
 
     def drop_collection(self, name: str) -> None:
         self._exec(f"DROP TABLE IF EXISTS `{name}`")
@@ -247,10 +256,43 @@ class StarRocksStore:
 
     def finalize(self, name: str) -> None:
         # StarRocks는 Milvus처럼 별도 load_collection 단계가 없음 — INSERT가 커밋되면
-        # 바로 조회 가능. 다만 벡터 인덱스(HNSW) 빌드는 백그라운드에서 비동기로 진행되므로,
-        # 색인 직후 바로 검색하면 인덱스가 아직 없어 첫 검색 몇 건이 브루트포스로 처리되며
-        # 느릴 수 있다 (벤치마크에서 이 점을 감안할 것).
+        # 바로 조회 가능. create_collection()이 인덱스를 안 만들어뒀다면(정상 경로) 여기서
+        # 적재가 끝난 뒤 한 번에 벡터 인덱스를 빌드한다 — 끝날 때까지 대기하므로 finalize()가
+        # 반환하면 바로 검색 가능하다(인덱스 없이 브루트포스로 검색되는 구간이 없어짐).
+        dim = self._pending_index_dim.pop(name, None)
+        if dim is not None:
+            logger.info(f"  벡터 인덱스 빌드 시작: {name} (dim={dim})")
+            self._exec(f"""
+                ALTER TABLE `{name}` ADD INDEX vec_idx (vector) USING VECTOR (
+                    "index_type" = "hnsw",
+                    "dim" = "{dim}",
+                    "metric_type" = "cosine_similarity",
+                    "is_vector_normed" = "false",
+                    "M" = "16",
+                    "efconstruction" = "100"
+                )
+            """)
+            self._wait_index_build(name)
+            logger.info(f"  벡터 인덱스 빌드 완료: {name}")
         logger.info(f"  삽입 완료 확인: {name} ({self.collection_size(name):,}건)")
+
+    def _wait_index_build(self, name: str, timeout_sec: float = 1800.0, poll_sec: float = 5.0) -> None:
+        """ALTER TABLE ... ADD INDEX ... USING VECTOR job이 끝날 때까지 SHOW ALTER TABLE
+        COLUMN을 폴링한다(State=FINISHED)."""
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            with self._conn.cursor(self._pymysql.cursors.DictCursor) as cur:
+                cur.execute(f"SHOW ALTER TABLE COLUMN FROM `{self._database}`")
+                rows = cur.fetchall()
+            matching = [r for r in rows if r.get("TableName") == name]
+            if matching:
+                state = matching[-1].get("State")
+                if state == "FINISHED":
+                    return
+                if state == "CANCELLED":
+                    raise RuntimeError(f"[StarRocks] 벡터 인덱스 빌드 실패({name}): {matching[-1].get('Msg')}")
+            time.sleep(poll_sec)
+        raise TimeoutError(f"[StarRocks] 벡터 인덱스 빌드가 {timeout_sec:.0f}s 안에 안 끝남: {name}")
 
     # ── 검색 ─────────────────────────────────────────────────────────────────
 
