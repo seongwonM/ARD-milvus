@@ -10,17 +10,16 @@
 #
 # 벡터 인덱스(HNSW)는 StarRocks 3.4+에서만 지원 — 3.5.19(안정 버전) 사용.
 # FE의 enable_experimental_vector 설정은 starrocks_store.py가 접속 시 자동으로 켠다.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: starrocks-loadtest-data
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 20Gi
----
+#
+# PVC를 /data/deploy/starrocks에 마운트하지 않는다 — 이 이미지는 FE/BE 전체(entrypoint.sh,
+# common.sh, conf.template, fe.conf 등)가 이미지 안에 그 경로로 미리 빌드되어 들어있는데,
+# 빈 PVC를 그 경로에 얹으면 그 내장 파일들이 통째로 가려져서 entrypoint.sh가 common.sh/
+# conf.template/fe.conf를 못 찾는 에러로 이어진다(k8s/starrocks.yaml에서 실제로 발생,
+# 2026-07-06). 공식 실행 예시(docker run, StarRocks/starrocks 저장소의
+# docker/dockerfiles/allin1/allin1-HOWTO.md)도 볼륨 마운트 없이 그냥 띄우는 방식이라
+# 그대로 따름 — 순수 비교용 벤치마크 도구라 pod 재시작 시 데이터가 날아가도 되고
+# (재색인하면 됨), 데이터 영속성이 필요하면 fe/meta, be/storage 같은 하위 경로에만
+# 별도로 마운트해야 한다(이 root 경로 전체를 덮어쓰면 안 됨).
 apiVersion: v1
 kind: Pod
 metadata:
@@ -34,9 +33,6 @@ spec:
       ports:
         - containerPort: 9030  # MySQL 프로토콜(FE 쿼리 포트) — starrocks_store.py가 여기로 접속
         - containerPort: 8030  # FE http
-      volumeMounts:
-        - name: starrocks-data
-          mountPath: /data/deploy/starrocks
       resources:
         requests:
           cpu: "1"
@@ -52,10 +48,6 @@ spec:
         initialDelaySeconds: 30
         periodSeconds: 10
         failureThreshold: 30
-  volumes:
-    - name: starrocks-data
-      persistentVolumeClaim:
-        claimName: starrocks-loadtest-data
 ---
 apiVersion: v1
 kind: Service
