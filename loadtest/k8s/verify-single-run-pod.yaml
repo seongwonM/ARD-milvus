@@ -1,23 +1,29 @@
-# locust-job.yaml(entrypoint.sh)이 백엔드마다 반복하는 단위 사이클
-#   cleanup_backend → deploy_backend(kubectl apply + wait Ready) → seed_corpus → locust 테스트 1회 → cleanup_backend
-# 을 milvus 백엔드 하나 + baseline 테스트 1회(interval=10, 3분)로 축소해서 단일 Pod로 실행한다.
-# Job은 여러 백엔드 x 여러 interval을 순회하느라 로그가 섞여서 어느 단계에서 막히는지
-# 구분이 안 되는데, 이 Pod는 그 중 "한 사이클"만 떼어내 kubectl logs -f 하나로 전 과정을
-# 그대로 볼 수 있게 한 것 — 여기서 통과하면 Job도 같은 이유로 실패할 일은 없다는 뜻.
+# Job(entrypoint.sh)이 백엔드마다 반복하는 사이클 중 milvus 1개 + baseline 테스트 1회만
+# 떼어내 단일 Pod에서 실행해보는 검증용. 함수로 감싸지 않고 위→아래 순서대로 그대로
+# 실행되는 평면 스크립트라 어느 줄에서 멈췄는지 kubectl logs만으로 바로 알 수 있다.
 #
-# entrypoint.sh를 그대로 쓰지 않고 로직을 인라인으로 복사한 이유: entrypoint.sh는 이미지에
-# COPY되어 있어 고치려면 push → build-push-loadtest.yml 재빌드 → 이미지 태그 갱신까지
-# 기다려야 한다. 검증은 지금 바로 해야 하므로, 이미지는 그대로 두고 command만 바꿔서 실행한다.
+# 이전 버전(cleanup_backend/deploy_backend 함수로 감싼 버전)은 실제로는 로그가 찍혀야
+# 정상인데도 아무 출력이 안 나온다는 보고가 있었음 — `set -x`(모든 실행 명령을 그대로
+# stdout에 echo)와 `PYTHONUNBUFFERED=1`(파이썬 프로세스의 stdout 블록 버퍼링 방지, 안
+# 하면 프로세스가 끝나거나 버퍼가 다 찰 때까지 아무 것도 안 보일 수 있음)이 빠져있던 게
+# 원인일 가능성이 높아 이번엔 둘 다 넣고, 각 kubectl/python/locust 호출 앞뒤로 타임스탬프
+# echo를 추가해 진행 상황을 촘촘하게 볼 수 있게 했다.
+#
+# entrypoint.sh를 이미지 안에서 그대로 쓰지 않고 로직을 인라인으로 복사한 이유: entrypoint.sh를
+# 고치려면 push → 이미지 재빌드 → 태그 갱신까지 기다려야 하는데, 검증은 지금 바로 해야 한다.
+# 이미지는 그대로 두고 command만 바꿔서 실행한다.
 #
 # 사전 준비: loadtest/k8s/rbac.yaml, loadtest/k8s/pvc.yaml, milvus-migration-secret이 먼저 있어야 함
 #   (locust-job.yaml 상단 주석 참고 — 이미 준비되어 있다면 생략)
 #
 # 실행: kubectl apply -f loadtest/k8s/verify-single-run-pod.yaml -n <namespace>
 # 진행 확인: kubectl logs -f verify-single-run -n <namespace>
-# 완료 확인: kubectl get pod verify-single-run -n <namespace>   (Completed=성공, Error=실패)
+# 상태 확인: kubectl get pod verify-single-run -n <namespace>   (Completed=성공, Error=실패)
+#   로그가 전혀 안 보이면 먼저 이 명령으로 STATUS를 확인할 것
+#   (Pending/ContainerCreating이면 아직 컨테이너 자체가 안 떠서 로그가 없는 게 정상)
 # 재실행(수정 후): kubectl delete pod verify-single-run -n <namespace> 후 다시 apply
 # 삭제: kubectl delete pod verify-single-run -n <namespace>
-#   (성공/실패 어느 쪽이든 스크립트 마지막에 cleanup_backend가 돌아 milvus/minio는 자동 정리됨)
+#   (성공/실패 어느 쪽이든 스크립트 마지막에 milvus/minio 정리 명령이 돌아 자동 정리됨)
 apiVersion: v1
 kind: Pod
 metadata:
@@ -35,70 +41,71 @@ spec:
       command: ["/bin/sh", "-c"]
       args:
         - |
-          set -e
+          set -x -e
           K8S_DIR="/app/milvus_migration/loadtest/k8s"
           RESULTS_DIR="/results"
+          ts() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 
-          deploy_backend() {
-            kubectl apply -f "$K8S_DIR/minio.yaml" -n "$MILVUS_NAMESPACE"
-            kubectl apply -f "$K8S_DIR/milvus.yaml" -n "$MILVUS_NAMESPACE"
-            kubectl wait --for=condition=Ready pod/milvus-loadtest -n "$MILVUS_NAMESPACE" --timeout=600s
-            kubectl rollout status deploy/minio-loadtest -n "$MILVUS_NAMESPACE" --timeout=300s
-          }
-          cleanup_backend() {
-            kubectl delete -f "$K8S_DIR/milvus.yaml" -n "$MILVUS_NAMESPACE" --ignore-not-found --wait=true
-            kubectl delete -f "$K8S_DIR/minio.yaml" -n "$MILVUS_NAMESPACE" --ignore-not-found --wait=true
-          }
-
-          echo "===== 0) 쿼리/corpus 벡터 캐싱 (1회성, 공유 캐시) ====="
+          echo "$(ts) [0/6] 쿼리/corpus 벡터 캐싱 시작"
           python -m milvus_migration.loadtest.cache_query_vectors --data-root /data
+          echo "$(ts) [0/6] 쿼리 벡터 캐싱 완료"
           python -m milvus_migration.loadtest.cache_chunk_vectors --data-root /data
+          echo "$(ts) [0/6] corpus 벡터 캐싱 완료"
 
-          echo "===== 1) cleanup_backend (이전 잔여 리소스 정리, 안전장치) ====="
-          cleanup_backend
+          echo "$(ts) [1/6] 이전 잔여 리소스 정리 시작 (안전장치, 없으면 바로 통과)"
+          kubectl delete -f "$K8S_DIR/milvus.yaml" -n "$MILVUS_NAMESPACE" --ignore-not-found --wait=true
+          kubectl delete -f "$K8S_DIR/minio.yaml" -n "$MILVUS_NAMESPACE" --ignore-not-found --wait=true
+          echo "$(ts) [1/6] 정리 완료"
 
-          echo "===== 2) deploy_backend (milvus) ====="
-          deploy_backend
+          echo "$(ts) [2/6] minio 배포 시작"
+          kubectl apply -f "$K8S_DIR/minio.yaml" -n "$MILVUS_NAMESPACE"
+          echo "$(ts) [2/6] milvus 배포 시작"
+          kubectl apply -f "$K8S_DIR/milvus.yaml" -n "$MILVUS_NAMESPACE"
+          echo "$(ts) [2/6] milvus Ready 대기 시작 (최대 600s)"
+          kubectl wait --for=condition=Ready pod/milvus-loadtest -n "$MILVUS_NAMESPACE" --timeout=600s
+          echo "$(ts) [2/6] milvus Ready"
+          echo "$(ts) [2/6] minio rollout 대기 시작 (최대 300s)"
+          kubectl rollout status deploy/minio-loadtest -n "$MILVUS_NAMESPACE" --timeout=300s
+          echo "$(ts) [2/6] minio rollout 완료 — 배포 단계 끝"
 
-          echo "===== 3) seed_corpus (캐시된 벡터 삽입) ====="
+          echo "$(ts) [3/6] corpus 색인 시작 (캐시된 벡터 삽입)"
           python -m milvus_migration.loadtest.seed_collection --data-root /data
+          echo "$(ts) [3/6] corpus 색인 완료"
 
-          echo "===== 4) locust baseline 1회 (interval=10s, run-time=3m) ====="
-          # entrypoint.sh는 --only-summary를 써서 실시간 stats 테이블(RPS/응답시간/실패건수)
-          # 출력을 꺼버리기 때문에 locust 실행 중 진짜 로그가 하나도 안 찍힌다. 여기서는
-          # --only-summary를 빼서 locust 내장 stats 테이블이 몇 초 간격으로 stdout에 직접
-          # 찍히게 한다(--logfile은 logging 모듈 출력만 파일로 보내고 이 stats 출력과는
-          # 무관 — kubectl logs에 그대로 보임). 진행 중 실제 요청 수/실패 건수가 보이므로
-          # "still running" 하트비트보다 훨씬 신뢰도 높은 신호다. hang이면 이 테이블 자체가
-          # 멈추므로 여전히 timeout watchdog으로 감지한다.
+          echo "$(ts) [4/6] locust baseline 시작 (interval=10s, run-time=3m, timeout=300s)"
+          # --only-summary를 안 쓰므로 locust 내장 실시간 stats 테이블(RPS/응답시간/실패건수)이
+          # 몇 초 간격으로 그대로 stdout에 찍힌다 (--logfile은 logging 모듈 출력만 파일로 보내고
+          # 이 stats 테이블 출력과는 무관).
           set +e
           timeout 300 locust -f milvus_migration/loadtest/locustfile_baseline.py --headless \
             -u 1 -r 1 --run-time 3m --interval 10 \
             --csv="$RESULTS_DIR/verify_baseline" --logfile="$RESULTS_DIR/verify_baseline.log"
           rc=$?
           set -e
-
+          echo "$(ts) [4/6] locust 종료 (exit=$rc)"
           if [ "$rc" -eq 124 ]; then
-            echo "!!! watchdog timeout(300s) 초과로 강제 종료 — locust가 멈춘 것으로 의심됨 (gevent monkey-patch와 호환 안 되는 blocking 호출 등) !!!" >&2
+            echo "$(ts) !!! watchdog timeout(300s) 초과 — locust hang 의심 (gevent와 안 맞는 blocking 호출 등) !!!" >&2
           elif [ "$rc" -ne 0 ]; then
-            echo "!!! locust가 오류로 종료됨 (exit=$rc) !!!" >&2
-          else
-            echo "locust 정상 종료"
+            echo "$(ts) !!! locust가 오류로 종료됨 (exit=$rc) !!!" >&2
           fi
 
-          echo "===== 5) cleanup_backend ====="
-          cleanup_backend
+          echo "$(ts) [5/6] 리소스 정리 시작"
+          kubectl delete -f "$K8S_DIR/milvus.yaml" -n "$MILVUS_NAMESPACE" --ignore-not-found --wait=true
+          kubectl delete -f "$K8S_DIR/minio.yaml" -n "$MILVUS_NAMESPACE" --ignore-not-found --wait=true
+          echo "$(ts) [5/6] 정리 완료"
 
           if [ "$rc" -ne 0 ]; then
-            echo "===== 검증 실패 (locust exit=$rc) — Pod 상태가 Error로 남음 ====="
+            echo "$(ts) [6/6] 검증 실패 (locust exit=$rc) — Pod 상태가 Error로 남음"
             exit "$rc"
           fi
-          echo "===== 검증 완료: 이 사이클이 Job 안에서도 동일하게 동작함 ====="
+          echo "$(ts) [6/6] 검증 완료: 이 사이클이 Job 안에서도 동일하게 동작함"
       env:
-        - name: MILVUS_NAMESPACE  # deploy/cleanup_backend가 이 값으로 milvus/minio를 apply/delete
+        - name: MILVUS_NAMESPACE  # kubectl apply/delete가 이 값의 네임스페이스를 대상으로 함
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: PYTHONUNBUFFERED  # 안 넣으면 python 프로세스 stdout이 블록 버퍼링되어 프로세스가
+          value: "1"              # 끝나거나 버퍼가 다 찰 때까지 kubectl logs에 아무 것도 안 보일 수 있음
         - name: LOADTEST_CACHE_DIR  # PVC(loadtest-results)에 저장 — 재실행해도 캐시 유지
           value: "/results/cache"
         - name: MILVUS_URI  # loadtest/k8s/milvus.yaml의 서비스 이름 — bench용 "milvus"와 충돌 방지
