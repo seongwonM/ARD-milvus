@@ -7,6 +7,14 @@ Milvus 단일 커넥션의 순수 왕복 latency 바닥값(L0)을 측정한다.
 여기서 얻는 L0는 테스트 B(locustfile_ramp.py)의 동시성 단계를 Little's Law로
 역산하는 데 사용한다 (Concurrency ≈ Target_TPS × L0).
 
+milvus 백엔드는 Locust 공식 locust.contrib.milvus.MilvusUser를 그대로 쓴다 —
+동기 MilvusClient를 직접 gevent 프로세스 안에서 쓰려던 시도들(threadpool로
+감싸기, grpc.experimental.gevent.init_gevent() 수동 호출, AsyncMilvusClient +
+asyncio 브릿지)이 전부 다른 방식으로 hang/RuntimeError/LoopExit이 났었는데
+(2026-07 실측), MilvusUser는 Locust 프로젝트 자신이 CI로 검증하며 유지보수하는
+구현이라 이 gevent+pymilvus 호환 문제를 이미 해결해뒀다. starrocks는 pymysql
+기반이라 애초에 이 문제가 없어 기존 방식(store_factory + threadpool)을 그대로 쓴다.
+
 사용법 (N값을 바꿔가며 반복 실행 — 각각 별도 프로세스):
     locust -f milvus_migration/loadtest/locustfile_baseline.py --headless \
         -u 1 -r 1 --run-time 3m --interval 10 \
@@ -50,33 +58,64 @@ def _add_args(parser) -> None:
 
 _debug("locustfile_baseline 모듈 로딩 시작")
 _cfg = Config.from_env()
-_store = build_store(_cfg)
 _collection = collection_name(_cfg)
 _query_ids, _query_vecs = load_query_cache()
 _cursor = QueryCursor(len(_query_ids))
 _debug("locustfile_baseline 모듈 로딩 완료")
 
 
-class MilvusBaselineUser(User):
-    """반드시 -u 1 -r 1로 실행 (동시 사용자 1명 고정) — 순차 순회 + 고정 간격."""
+if _cfg.backend == "milvus":
+    from locust.contrib.milvus import MilvusUser
 
-    def wait_time(self) -> float:
-        return self.environment.parsed_options.interval
+    class LoadUser(MilvusUser):
+        """반드시 -u 1 -r 1로 실행 (동시 사용자 1명 고정) — 순차 순회 + 고정 간격."""
 
-    @task
-    def search_one(self) -> None:
-        vec = _query_vecs[_cursor.next()]
-        start = time.perf_counter()
-        exc = None
-        try:
-            threadpool_search_one(_store, _collection, vec, top_k=10)
-        except Exception as e:
-            exc = e
-        events.request.fire(
-            request_type=_cfg.backend,
-            name="search",
-            response_time=(time.perf_counter() - start) * 1000,
-            response_length=0,
-            context={},
-            exception=exc,
-        )
+        def __init__(self, environment) -> None:
+            super().__init__(
+                environment,
+                uri=_cfg.milvus.uri,
+                token=_cfg.milvus.token,
+                collection_name=_collection,
+                timeout=300,
+            )
+
+        def wait_time(self) -> float:
+            return self.environment.parsed_options.interval
+
+        @task
+        def search_one(self) -> None:
+            vec = _query_vecs[_cursor.next()]
+            self.search(
+                data=[vec.tolist()],
+                anns_field="vector",
+                limit=10,
+                search_params={"metric_type": "COSINE", "params": {"ef": 100}},
+                output_fields=["doc_id"],
+            )
+
+else:
+    _store = build_store(_cfg)
+
+    class LoadUser(User):
+        """반드시 -u 1 -r 1로 실행 (동시 사용자 1명 고정) — 순차 순회 + 고정 간격."""
+
+        def wait_time(self) -> float:
+            return self.environment.parsed_options.interval
+
+        @task
+        def search_one(self) -> None:
+            vec = _query_vecs[_cursor.next()]
+            start = time.perf_counter()
+            exc = None
+            try:
+                threadpool_search_one(_store, _collection, vec, top_k=10)
+            except Exception as e:
+                exc = e
+            events.request.fire(
+                request_type=_cfg.backend,
+                name="search",
+                response_time=(time.perf_counter() - start) * 1000,
+                response_length=0,
+                context={},
+                exception=exc,
+            )

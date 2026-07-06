@@ -2,6 +2,12 @@
 늘려서, Milvus+MinIO가 실제로 버틸 수 있는 처리량(TPS) 천장을 찾는다.
 (테스트 A와 반대로 이번엔 동시성만 변수 — OFAT 원칙)
 
+milvus 백엔드는 Locust 공식 locust.contrib.milvus.MilvusUser(내부의 MilvusV2Client)를
+그대로 쓴다 — 이유는 locustfile_baseline.py 상단 docstring 참고. 다만 이 테스트는
+stage 태깅용 커스텀 context가 꼭 필요한데 MilvusUser.search()의 자동 이벤트 발행은
+context를 못 받으므로, self.client(MilvusV2Client).search()를 직접 불러 순수
+결과(response_time/exception)만 받고 이벤트는 우리가 직접 stage 컨텍스트를 붙여 발행한다.
+
 설계 포인트
 -----------
 1. 누적(의도됨): 새 stage에서 유저가 추가돼도 이전 stage 유저는 죽지 않고
@@ -77,7 +83,6 @@ def _add_args(parser) -> None:
 
 _debug("locustfile_ramp 모듈 로딩 시작")
 _cfg = Config.from_env()
-_store = build_store(_cfg)
 _collection = collection_name(_cfg)
 _query_ids, _query_vecs = load_query_cache()
 _cursor = QueryCursor(len(_query_ids))
@@ -132,31 +137,67 @@ class RampShape(LoadTestShape):
         return None
 
 
-class MilvusLoadUser(User):
-    wait_time = constant(0)  # 페이싱 고정(0) — 동시성만 변수로 둔다
+def _fire_search_event(response_time_ms: float, exception) -> None:
+    stage_idx = _stage_state["idx"]
+    target_users = _stage_state["target_users"]
+    elapsed_in_stage = round(time.time() - _stage_state["started_at"], 1)
+    events.request.fire(
+        request_type=_cfg.backend,
+        name=f"search/stage{stage_idx}_u{target_users}",
+        response_time=response_time_ms,
+        response_length=0,
+        context={
+            "stage_idx": stage_idx,
+            "target_users": target_users,
+            "elapsed_in_stage": elapsed_in_stage,
+        },
+        exception=exception,
+    )
 
-    @task
-    def search_one(self) -> None:
-        stage_idx = _stage_state["idx"]
-        target_users = _stage_state["target_users"]
-        elapsed_in_stage = round(time.time() - _stage_state["started_at"], 1)
 
-        vec = _query_vecs[_cursor.next()]
-        start = time.perf_counter()
-        exc = None
-        try:
-            threadpool_search_one(_store, _collection, vec, top_k=10)
-        except Exception as e:
-            exc = e
-        events.request.fire(
-            request_type=_cfg.backend,
-            name=f"search/stage{stage_idx}_u{target_users}",
-            response_time=(time.perf_counter() - start) * 1000,
-            response_length=0,
-            context={
-                "stage_idx": stage_idx,
-                "target_users": target_users,
-                "elapsed_in_stage": elapsed_in_stage,
-            },
-            exception=exc,
-        )
+if _cfg.backend == "milvus":
+    from locust.contrib.milvus import MilvusUser
+
+    class LoadUser(MilvusUser):
+        wait_time = constant(0)  # 페이싱 고정(0) — 동시성만 변수로 둔다
+
+        def __init__(self, environment) -> None:
+            super().__init__(
+                environment,
+                uri=_cfg.milvus.uri,
+                token=_cfg.milvus.token,
+                collection_name=_collection,
+                timeout=300,
+            )
+
+        @task
+        def search_one(self) -> None:
+            vec = _query_vecs[_cursor.next()]
+            # self.search()(MilvusUser 기본 제공)는 이벤트를 자동 발행하지만 stage
+            # 컨텍스트를 못 받는다. self.client(MilvusV2Client)를 직접 불러 순수
+            # 결과만 받고, 이벤트는 stage 태깅을 붙여 우리가 직접 발행한다.
+            result = self.client.search(
+                data=[vec.tolist()],
+                anns_field="vector",
+                limit=10,
+                search_params={"metric_type": "COSINE", "params": {"ef": 100}},
+                output_fields=["doc_id"],
+            )
+            _fire_search_event(result.get("response_time", 0), result.get("exception"))
+
+else:
+    _store = build_store(_cfg)
+
+    class LoadUser(User):
+        wait_time = constant(0)  # 페이싱 고정(0) — 동시성만 변수로 둔다
+
+        @task
+        def search_one(self) -> None:
+            vec = _query_vecs[_cursor.next()]
+            start = time.perf_counter()
+            exc = None
+            try:
+                threadpool_search_one(_store, _collection, vec, top_k=10)
+            except Exception as e:
+                exc = e
+            _fire_search_event((time.perf_counter() - start) * 1000, exc)
