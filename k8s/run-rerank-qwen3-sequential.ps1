@@ -19,7 +19,7 @@
   ./k8s/run-rerank-qwen3-sequential.ps1 -TimeoutSec 1800
 #>
 param(
-    [string]$Namespace = "",
+    [string]$Namespace = "user-x0179564",
     [int]$TimeoutSec = 3600
 )
 

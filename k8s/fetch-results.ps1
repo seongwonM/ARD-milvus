@@ -17,7 +17,7 @@ param(
     [ValidateSet("retrieval", "rerank", "all")]
     [string]$Stage = "all",
     [string]$OutDir = "results",
-    [string]$Namespace = "",
+    [string]$Namespace = "user-x0179564",
     [int]$TimeoutSec = 3600
 )
 
