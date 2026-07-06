@@ -79,16 +79,50 @@ def _retry_snapshot(client: RerankClient | EmbeddingClient) -> tuple[int, float,
     return client.retry_count, client.failed_time_sec, len(client.retry_success_at)
 
 
-def make_embedding_score_fn(client: EmbeddingClient) -> ScoreFn:
+def _unique_doc_ids(candidates: dict[str, list[str]], top_n: int) -> list[str]:
+    """모든 쿼리의 top_n 후보를 합친 유니크 문서 id 목록.
+
+    코퍼스는 고정 크기라 같은 문서가 여러 쿼리의 top_n에 반복 등장한다 — 쿼리마다 후보를
+    다시 인코딩하면 쿼리 수 x top_n번 호출하는 꼴이 되지만, 유니크 집합만 한 번씩 인코딩하면
+    코퍼스 크기만큼만 호출하면 된다.
+    """
+    seen: set[str] = set()
+    order: list[str] = []
+    for cand_ids_full in candidates.values():
+        for d in cand_ids_full[:top_n]:
+            if d not in seen:
+                seen.add(d)
+                order.append(d)
+    return order
+
+
+def make_precomputed_embedding_score_fn(
+    client: EmbeddingClient, candidates: dict[str, list[str]], docs: dict, top_n: int,
+) -> ScoreFn:
+    """문서 벡터만 미리 한 번씩 배치 인코딩해서 캐싱한다 (쿼리는 캐싱하지 않음).
+
+    실제 운영에서도 문서는 인덱싱 시점에 한 번만 임베딩해서 벡터 저장소에 넣어두고,
+    쿼리는 요청이 올 때마다 그때그때 임베딩한다 — 문서를 쿼리별로 다시 인코딩하는 건
+    애초에 운영 구조와 안 맞는 낭비였을 뿐이다. 반대로 쿼리까지 미리 다 모아 배치
+    인코딩해버리면 "요청 1건당 API 응답 시간"이라는 벤치마크 latency/QPS의 의미 자체가
+    사라지므로, 쿼리는 기존처럼 score() 호출 시점(=쿼리별 워커)에 API로 임베딩한다.
+    """
+    unique_doc_ids = _unique_doc_ids(candidates, top_n)
+    doc_texts = [_doc_text(docs, d) for d in unique_doc_ids]
+    logger.info(f"  [사전 인코딩 - 문서만] 유니크 후보 문서 {len(unique_doc_ids):,}개 (실제 인덱싱 단계에 해당)")
+    doc_vecs = client.encode(doc_texts)
+    doc_vec_map = {doc_id: vec for doc_id, vec in zip(unique_doc_ids, doc_vecs)}
+
     def score(q_text: str, cand_ids: list[str], cand_texts: list[str]) -> dict[str, float]:
-        vecs = client.encode([q_text] + cand_texts)
-        scores = _cosine_scores(vecs[0], vecs[1:])
+        q_vec = client.encode([q_text])[0]
+        cand_vecs = np.stack([doc_vec_map[d] for d in cand_ids])
+        scores = _cosine_scores(q_vec, cand_vecs)
         return {doc_id: float(s) for doc_id, s in zip(cand_ids, scores)}
     return score
 
 
 def run_rerank(
-    score_fn: ScoreFn,
+    score_fn: ScoreFn | None,
     client: RerankClient | EmbeddingClient,
     rerank_model: str,
     rerank_method: str,
@@ -121,6 +155,18 @@ def run_rerank(
     log_every = max(1, round(total * 0.025))  # 2.5% 단위(예: 12,000개면 300개 = concurrency 32 기준 약 10배치마다)
 
     retry_count_before, failed_time_before, retry_success_before = _retry_snapshot(client)
+
+    precompute_sec = 0.0
+    if rerank_method == "embedding_cosine":
+        assert isinstance(client, EmbeddingClient)
+        t_pre = time.time()
+        score_fn = make_precomputed_embedding_score_fn(client, candidates, docs, top_n)
+        precompute_sec = round(time.time() - t_pre, 2)
+        logger.info(
+            f"  문서 사전 인코딩 완료: {precompute_sec}s — 쿼리는 기존처럼 워커마다 API로 임베딩 "
+            f"(latency/QPS는 이 쿼리 임베딩 호출 기준)"
+        )
+    assert score_fn is not None
 
     def process_one(qid: str, cand_ids_full: list[str]) -> None:
         q_text = queries.get(qid)
@@ -194,6 +240,11 @@ def run_rerank(
         f"concurrency={concurrency}  wall={wall_sec}s  qps={qps}(=concurrency/평균응답시간)  "
         f"평균응답={round(mean_latency_sec*1000, 1)}ms  p50={p50_ms}ms  p95={p95_ms}ms"
     )
+    if rerank_method == "embedding_cosine" and precompute_sec:
+        logger.info(
+            f"  (문서 사전 인코딩 {precompute_sec}s는 실제 서비스의 인덱싱 단계에 해당 — 위 wall/평균응답/"
+            f"p50/p95/qps는 쿼리 임베딩 API 호출 기준이라 그대로 유효함)"
+        )
     if retry_count:
         logger.info(
             f"  재시도: 실패한 시도={retry_count}회  재시도 끝에 성공한 호출={retry_calls}건  "
@@ -217,6 +268,7 @@ def run_rerank(
         "top_n": top_n,
         "n_queries": n,
         "concurrency": concurrency,
+        "precompute_sec": precompute_sec,
         "wall_sec": wall_sec,
         "rerank_qps": qps,
         "mean_latency_ms": round(mean_latency_sec * 1000, 1),
@@ -268,8 +320,11 @@ def main() -> None:
     docs, queries, qrels = load_from_dir(args.data_root)
     os.makedirs(args.out, exist_ok=True)
 
-    # (표시용 모델명, 방식, score 함수, client) 조합 목록 — client는 재시도 통계 집계용
-    rerankers: list[tuple[str, str, ScoreFn, RerankClient | EmbeddingClient]] = []
+    # (표시용 모델명, 방식, score 함수, client) 조합 목록 — client는 재시도 통계 집계용.
+    # embedding_cosine 방식은 score_fn을 여기서 만들지 않고 None으로 둔다 — 문서/쿼리 벡터를
+    # candidates/top_n 기준으로 사전 인코딩해서 캐싱해야 하는데, candidates와 top_n은 이 시점엔
+    # 아직 모르고 run_rerank() 안에서만 알 수 있기 때문 (make_precomputed_embedding_score_fn 참고).
+    rerankers: list[tuple[str, str, ScoreFn | None, RerankClient | EmbeddingClient]] = []
     for model in args.rerank_model:
         rerankers.append((model, "rerank_api", make_rerank_api_score_fn(rerank_client, model), rerank_client))
     for model in args.embedding_rerank_model:
@@ -281,7 +336,7 @@ def main() -> None:
             timeout=cfg.embedding.timeout,
         )
         emb_client = EmbeddingClient(emb_cfg)
-        rerankers.append((model, "embedding_cosine", make_embedding_score_fn(emb_client), emb_client))
+        rerankers.append((model, "embedding_cosine", None, emb_client))
 
     all_results: list[dict] = []
     run_timestamp = time.strftime("%Y%m%d_%H%M%S")

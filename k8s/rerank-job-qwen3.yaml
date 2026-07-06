@@ -1,5 +1,9 @@
 # Reranking Job — Qwen3-Embedding-8B (retrieval 때 쓰던 임베딩 API 재사용, cosine 재정렬,
 # --embedding-rerank-model — "qwen3 reranker"는 별도 API가 아니라 이 방식).
+# qwen3_embedding_8b_top100.json(=qwen3 자기 자신의 retrieval 결과)은 --retrieval-result에서
+# 뺐음 — bi-encoder라 retrieval과 rerank가 같은 모델/벡터면 재정렬해도 순위가 거의 그대로라
+# 정보량이 없는 조합(2026-07-06). hcp_llm/bge_m3 retrieval 결과를 qwen3로 다시 임베딩하는
+# 건 다른 계열 bi-encoder 앙상블이라 의미 있어서 그대로 둠.
 # PVC(bench-results)에 /results/retrieval/*.json (retrieval top100 결과)이 이미 있어야
 # 합니다 — retrieval Job 3개(k8s/bench-jobs.yaml)를 돌려서 채우거나, 로컬에 이미 있는
 # top100 결과를 아래 "PVC 준비" 방법으로 직접 주입하세요.
@@ -76,7 +80,6 @@ spec:
                 --retrieval-result \
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
-                  /results/retrieval/qwen3_embedding_8b_top100.json \
                 --embedding-rerank-model Qwen3-Embedding-8B \
                 --top-n 5 \
                 --data-root /data \
@@ -89,7 +92,7 @@ spec:
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
               value: "64"
             - name: EMBEDDING_BATCH_SIZE
-              value: "512"
+              value: "64"
             - name: EMBEDDING_TIMEOUT
               value: "120"
             - name: EMBEDDING_API_ENDPOINT
@@ -137,7 +140,6 @@ spec:
                 --retrieval-result \
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
-                  /results/retrieval/qwen3_embedding_8b_top100.json \
                 --embedding-rerank-model Qwen3-Embedding-8B \
                 --top-n 10 \
                 --data-root /data \
@@ -150,7 +152,7 @@ spec:
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
               value: "64"
             - name: EMBEDDING_BATCH_SIZE
-              value: "512"
+              value: "64"
             - name: EMBEDDING_TIMEOUT
               value: "120"
             - name: EMBEDDING_API_ENDPOINT
@@ -198,7 +200,6 @@ spec:
                 --retrieval-result \
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
-                  /results/retrieval/qwen3_embedding_8b_top100.json \
                 --embedding-rerank-model Qwen3-Embedding-8B \
                 --top-n 20 \
                 --data-root /data \
@@ -211,7 +212,7 @@ spec:
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
               value: "64"
             - name: EMBEDDING_BATCH_SIZE
-              value: "512"
+              value: "64"
             - name: EMBEDDING_TIMEOUT
               value: "120"
             - name: EMBEDDING_API_ENDPOINT
@@ -259,7 +260,6 @@ spec:
                 --retrieval-result \
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
-                  /results/retrieval/qwen3_embedding_8b_top100.json \
                 --embedding-rerank-model Qwen3-Embedding-8B \
                 --top-n 50 \
                 --data-root /data \
@@ -272,7 +272,7 @@ spec:
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
               value: "64"
             - name: EMBEDDING_BATCH_SIZE
-              value: "512"
+              value: "64"
             - name: EMBEDDING_TIMEOUT
               value: "120"
             - name: EMBEDDING_API_ENDPOINT
@@ -320,7 +320,6 @@ spec:
                 --retrieval-result \
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
-                  /results/retrieval/qwen3_embedding_8b_top100.json \
                 --embedding-rerank-model Qwen3-Embedding-8B \
                 --top-n 100 \
                 --data-root /data \
@@ -333,7 +332,7 @@ spec:
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
               value: "64"
             - name: EMBEDDING_BATCH_SIZE
-              value: "512"
+              value: "64"
             - name: EMBEDDING_TIMEOUT
               value: "120"
             - name: EMBEDDING_API_ENDPOINT
