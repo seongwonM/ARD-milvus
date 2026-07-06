@@ -62,8 +62,12 @@ if ($Stage -eq "retrieval" -or $Stage -eq "all") {
 }
 
 if ($Stage -eq "rerank" -or $Stage -eq "all") {
+    # bge는 top_n(5/10/20/50/100)별로 Job/pod가 분리되어 있고, qwen3는 pod 하나가
+    # --top-n 5 10 20 50 100을 순차 처리하는 Job 하나로 합쳐져 있음(2026-07-06,
+    # k8s/rerank-job-qwen3.yaml 참고 — 5개 pod 동시 실행 시 서로 API를 두들겨 밀리는
+    # 현상 + 코퍼스/retrieval JSON 중복 로딩으로 인한 OOM 때문).
     $topNs = @(5, 10, 20, 50, 100)
-    $rerankJobs = @("bge", "qwen3") | ForEach-Object { $r = $_; $topNs | ForEach-Object { "bench-rerank-$r-top$_" } }
+    $rerankJobs = @($topNs | ForEach-Object { "bench-rerank-bge-top$_" }) + @("bench-rerank-qwen3")
     foreach ($job in $rerankJobs) {
         Wait-AndFetch -JobName $job -RemotePath "/results/rerank" -LocalPath "$OutDir\rerank"
     }

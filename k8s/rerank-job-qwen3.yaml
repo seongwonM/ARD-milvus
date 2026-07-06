@@ -7,16 +7,21 @@
 # PVC(bench-results)에 /results/retrieval/*.json (retrieval top100 결과)이 이미 있어야
 # 합니다 — retrieval Job 3개(k8s/bench-jobs.yaml)를 돌려서 채우거나, 로컬에 이미 있는
 # top100 결과를 아래 "PVC 준비" 방법으로 직접 주입하세요.
-# 리랭커별로 파일을 분리했습니다(bge: k8s/rerank-job-bge.yaml, qwen3: 이 파일) —
-# 모델 하나당 5개(top_n=5/10/20/50/100) Job만 동시에 뜨게 해서 리소스 여유를 두기 위함.
-# top_n마다도 Job(pod)을 분리했습니다 — top_n을 한 pod에서 순차로 돌리면 뒤 top_n일수록
-# 느려지는지(캐시/스로틀링 등) top_n 자체의 속도 차이인지 구분이 안 돼서, top_n별로도
-# 격리해 속도를 정확히 재기 위함입니다.
+#
+# top_n(5/10/20/50/100)을 Job/pod 5개로 나눠 동시에 띄웠었는데(2026-07-06 이전), pod
+# 5개가 STARTUP_DELAY_SEC(0/15/30/45/60s)로 살짝만 엇갈려 시작해서 사실상 같은 API를
+# 동시에 두드리는 구조였고, 그로 인해 먼저 시작한 pod가 서버를 붙잡는 동안 뒤 pod가
+# 밀리는 현상 + 코퍼스/retrieval JSON을 pod마다 중복으로 메모리에 올려서 OOM까지 겹쳤다
+# (2026-07-06). 그래서 pod 하나로 합치고 rerank_runner.py의 --top-n에 5개 값을 한 번에
+# 넘겨 순차 처리하도록 되돌렸다 — --top-n은 원래 nargs="+"라 여러 값을 받으면 값마다
+# 순서대로 run_rerank()를 호출하고, 그때마다 결과를 바로 PVC에 저장한 뒤 다음 top_n으로
+# 넘어간다(코드 변경 없음). 코퍼스/retrieval JSON은 프로세스 시작 시 한 번만 메모리에
+# 올라가고, top_n별 문서 벡터 캐시(doc_vec_map)도 한 top_n이 끝나면 다음 top_n으로 넘어가기
+# 전에 GC 대상이 되므로, 5개 pod에 흩어 올렸던 것보다 오히려 메모리 사용이 안정적이다.
 #
 # 실행: (k8s/rerank-job-bge.yaml을 먼저 적용해 완료를 확인한 뒤 이 파일을 적용하는 걸 권장)
-#   kubectl wait --for=condition=complete \
-#     job/bench-rerank-bge-top5 job/bench-rerank-bge-top10 job/bench-rerank-bge-top20 \
-#     job/bench-rerank-bge-top50 job/bench-rerank-bge-top100 --timeout=3600s
+#   kubectl wait --for=condition=complete job/bench-rerank-bge-top5 job/bench-rerank-bge-top10 \
+#     job/bench-rerank-bge-top20 job/bench-rerank-bge-top50 job/bench-rerank-bge-top100 --timeout=3600s
 #   kubectl apply -f k8s/rerank-job-qwen3.yaml
 #
 # PVC 준비 (retrieval Job 없이 로컬 top100 결과를 직접 쓰는 경우 — k8s/pod.yaml 참고).
@@ -25,48 +30,30 @@
 #   kubectl apply -f k8s/pod.yaml
 #   kubectl cp ./results/retrieval/hcp_llm_latest_top100.json ard-milvus:/results/retrieval/hcp_llm_latest_top100.json
 #   kubectl cp ./results/retrieval/bge_m3_top100.json ard-milvus:/results/retrieval/bge_m3_top100.json
-#   kubectl cp ./results/retrieval/qwen3_embedding_8b_top100.json ard-milvus:/results/retrieval/qwen3_embedding_8b_top100.json
 #   kubectl apply -f k8s/rerank-job-qwen3.yaml
 #
-# 삭제: kubectl delete job bench-rerank-qwen3-top5 bench-rerank-qwen3-top10 \
-#   bench-rerank-qwen3-top20 bench-rerank-qwen3-top50 bench-rerank-qwen3-top100
-# 로그: kubectl logs job/bench-rerank-qwen3-top5  (top_n별로 각각 확인)
+# 삭제: kubectl delete job bench-rerank-qwen3
+# 로그: kubectl logs job/bench-rerank-qwen3 -f  (top_n 5개가 한 pod에서 순서대로 찍힘)
 # 결과를 로컬로 자동 복사: ./k8s/fetch-results.ps1 -Stage rerank  (Job 완료까지 대기 후 results/에 저장)
 #
-# 리소스: rerank_runner.py가 순차 호출 대신 큐(워커 풀)로 동시에 여러 요청을 흘려보내도록
-# 바뀌면서 pod당 request 512Mi/limit 1.5Gi로 올림(원래는 256Mi대였음).
-# 이 파일 5개 Job 동시 적용 기준 합계 = request 2.5Gi / limit 7.5Gi, cpu request 1.25 / limit 5.
-# k8s/rerank-job-bge.yaml과 동시에 적용해도(원래 10개 Job 한 번에 띄우는 것과 같음) 크게
-# 빠듯하지 않지만, 그래도 bge 파일 먼저 적용해 완료를 확인한 뒤 이 파일을 적용하는 걸 권장.
+# EMBEDDING_BATCH_SIZE=256: 문서 사전 인코딩(순차 호출, bench/rerank_runner.py의
+# make_precomputed_embedding_score_fn) 한 번의 API 요청에 담는 문서 수.
 #
-# RERANK_CONCURRENCY: 큐로 동시에 흘려보낼 요청 수. QPS는 총 소요시간이 아니라 API 응답
-# latency로부터 역산하므로(Little's Law: qps = concurrency / 평균응답시간) 이 값을 올려도
-# QPS 계산 자체가 왜곡되지 않음 — 대신 동시 요청 수가 늘어난 만큼 리소스 사용량은 커짐.
-# k8s/rerank-job-bge.yaml(cross-encoder, query+top_n개 문서를 매번 같이 보냄)은 503/504가
-# 잦아서 256→64→32→16으로 낮춰야 했지만, 이 파일(qwen3, embedding_cosine)은 사정이 다름 —
-# rerank_runner.py가 문서는 사전에 한 번만 배치 인코딩해서 캐싱하고, 쿼리는 요청마다
-# 텍스트 1개짜리 가벼운 임베딩 호출만 하므로(2026-07-06) bge보다 훨씬 높은 동시성을
-# 버틸 수 있어 256으로 올림. 5xx가 잦아지면 이 값을 낮출 것, 안정적이면 유지.
-# 재시도/백오프는 개별 호출 attempt 기반 대신 풀 공유 쿨다운(서킷 브레이커, reranker.py/
+# RERANK_CONCURRENCY=16: 쿼리 처리(요청마다 텍스트 1개짜리 임베딩 호출)용 큐 크기.
+# 이전엔 쿼리 요청이 가볍다는 이유로 256까지 올렸었지만, pod를 하나로 합친 김에 bge와
+# 같은 보수적인 값(16)으로 맞춰서 서버 부하를 더 안전하게 가져간다(2026-07-06). QPS는
+# 총 소요시간이 아니라 API 응답 latency로부터 역산하므로(Little's Law) 이 값을 낮춰도
+# QPS 계산 자체가 왜곡되지는 않는다.
+#
+# 재시도/백오프: 개별 호출 attempt 기반 대신 풀 공유 쿨다운(서킷 브레이커, reranker.py/
 # embedding.py의 _wait_if_paused 참고)으로 AWS "Full Jitter" 방식을 적용해 워커들이
-# 똑같은 시각에 우르르 재시도하는 걸 방지함.
-#
-# STARTUP_DELAY_SEC: 같은 파일 안 5개 pod가 전부 동시에 같은 API(엔드포인트 공유)를 두들기면
-# 지연이 심해져서, Job마다 15초씩 엇갈리게(0/15/30/45/60초) 시작 전 대기하도록 함
-# (rerank_runner.py가 이 대기를 "총 소요시간" 집계 전에 처리 — wall_sec/qps에는 안 들어감).
-#
-# REQUEST_INTERVAL_SEC: 큐에 새 요청을 "제출"하는 속도 조절용(초당 요청 수를 인위적으로
-# 낮추고 싶을 때). 원래 쿼리 호출 사이마다 0.5s씩 대기를 뒀었는데(API 과부하 방지 목적),
-# 실제로 돌려보니 재시도가 필요해도 1회 만에 바로 성공해서 과부하 우려가 근거 없었음 —
-# 0으로 낮춰서 불필요한 대기 없이 최대 속도로 호출한다.
-#
-# 재시도: reranker.py/embedding.py 둘 다 실패 시 무한 재시도(백오프 상한 30s) — 쿼리를
-# 버릴 수 없어서 3회 만에 포기하지 않고 성공할 때까지 계속 시도함.
+# 똑같은 시각에 우르르 재시도하는 걸 방지함. 무한 재시도(백오프 상한 30s) — 쿼리를
+# 버릴 수 없어서 3회 만에 포기하지 않고 성공할 때까지 계속 시도한다.
 
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: bench-rerank-qwen3-top5
+  name: bench-rerank-qwen3
 spec:
   backoffLimit: 0
   template:
@@ -84,16 +71,14 @@ spec:
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
                 --embedding-rerank-model Qwen3-Embedding-8B \
-                --top-n 5 \
+                --top-n 5 10 20 50 100 \
                 --data-root /data \
                 --out /results/rerank
           env:
-            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
-              value: "0"
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "256"
+              value: "16"
             - name: EMBEDDING_BATCH_SIZE
               value: "256"
             - name: EMBEDDING_TIMEOUT
@@ -114,250 +99,10 @@ spec:
           resources:
             requests:
               cpu: "500m"
-              memory: "768Mi"
+              memory: "1.5Gi"
             limits:
               cpu: "2"
-              memory: "2Gi"
-      volumes:
-        - name: bench-results
-          persistentVolumeClaim:
-            claimName: bench-results
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bench-rerank-qwen3-top10
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:a4780e15b6275a64c41cf30774b02c37d5f302f3
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              python -m milvus_migration.bench.rerank_runner \
-                --retrieval-result \
-                  /results/retrieval/hcp_llm_latest_top100.json \
-                  /results/retrieval/bge_m3_top100.json \
-                --embedding-rerank-model Qwen3-Embedding-8B \
-                --top-n 10 \
-                --data-root /data \
-                --out /results/rerank
-          env:
-            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
-              value: "15"
-            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
-              value: "0"
-            - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "256"
-            - name: EMBEDDING_BATCH_SIZE
-              value: "256"
-            - name: EMBEDDING_TIMEOUT
-              value: "300"
-            - name: EMBEDDING_API_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_ENDPOINT
-            - name: EMBEDDING_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_KEY
-          volumeMounts:
-            - name: bench-results
-              mountPath: /results
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "768Mi"
-            limits:
-              cpu: "2"
-              memory: "2Gi"
-      volumes:
-        - name: bench-results
-          persistentVolumeClaim:
-            claimName: bench-results
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bench-rerank-qwen3-top20
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:a4780e15b6275a64c41cf30774b02c37d5f302f3
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              python -m milvus_migration.bench.rerank_runner \
-                --retrieval-result \
-                  /results/retrieval/hcp_llm_latest_top100.json \
-                  /results/retrieval/bge_m3_top100.json \
-                --embedding-rerank-model Qwen3-Embedding-8B \
-                --top-n 20 \
-                --data-root /data \
-                --out /results/rerank
-          env:
-            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
-              value: "30"
-            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
-              value: "0"
-            - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "256"
-            - name: EMBEDDING_BATCH_SIZE
-              value: "256"
-            - name: EMBEDDING_TIMEOUT
-              value: "300"
-            - name: EMBEDDING_API_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_ENDPOINT
-            - name: EMBEDDING_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_KEY
-          volumeMounts:
-            - name: bench-results
-              mountPath: /results
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "768Mi"
-            limits:
-              cpu: "2"
-              memory: "2Gi"
-      volumes:
-        - name: bench-results
-          persistentVolumeClaim:
-            claimName: bench-results
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bench-rerank-qwen3-top50
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:a4780e15b6275a64c41cf30774b02c37d5f302f3
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              python -m milvus_migration.bench.rerank_runner \
-                --retrieval-result \
-                  /results/retrieval/hcp_llm_latest_top100.json \
-                  /results/retrieval/bge_m3_top100.json \
-                --embedding-rerank-model Qwen3-Embedding-8B \
-                --top-n 50 \
-                --data-root /data \
-                --out /results/rerank
-          env:
-            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
-              value: "45"
-            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
-              value: "0"
-            - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "256"
-            - name: EMBEDDING_BATCH_SIZE
-              value: "256"
-            - name: EMBEDDING_TIMEOUT
-              value: "300"
-            - name: EMBEDDING_API_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_ENDPOINT
-            - name: EMBEDDING_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_KEY
-          volumeMounts:
-            - name: bench-results
-              mountPath: /results
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "768Mi"
-            limits:
-              cpu: "2"
-              memory: "2Gi"
-      volumes:
-        - name: bench-results
-          persistentVolumeClaim:
-            claimName: bench-results
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bench-rerank-qwen3-top100
-spec:
-  backoffLimit: 0
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: bench
-          image: ghcr.io/seongwonm/ard-milvus:a4780e15b6275a64c41cf30774b02c37d5f302f3
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              python -m milvus_migration.bench.rerank_runner \
-                --retrieval-result \
-                  /results/retrieval/hcp_llm_latest_top100.json \
-                  /results/retrieval/bge_m3_top100.json \
-                --embedding-rerank-model Qwen3-Embedding-8B \
-                --top-n 100 \
-                --data-root /data \
-                --out /results/rerank
-          env:
-            - name: STARTUP_DELAY_SEC  # 동시에 뜨는 rerank Job들끼리 API 요청 엇박 처리
-              value: "60"
-            - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
-              value: "0"
-            - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "256"
-            - name: EMBEDDING_BATCH_SIZE
-              value: "256"
-            - name: EMBEDDING_TIMEOUT
-              value: "300"
-            - name: EMBEDDING_API_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_ENDPOINT
-            - name: EMBEDDING_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: milvus-migration-secret
-                  key: EMBEDDING_API_KEY
-          volumeMounts:
-            - name: bench-results
-              mountPath: /results
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "768Mi"
-            limits:
-              cpu: "2"
-              memory: "2Gi"
+              memory: "4Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
