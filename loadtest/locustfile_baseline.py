@@ -54,6 +54,47 @@ def _add_args(parser) -> None:
         "--interval", type=float, default=10.0,
         help="쿼리 1개를 보내는 간격 N(초). 이 값을 바꿔가며 여러 번 독립 실행한다.",
     )
+    parser.add_argument(
+        "--max-requests", type=int, default=None,
+        help="이 개수만큼 요청이 발사되면 자동 종료(runner.quit()). "
+             "예: 쿼리 캐시 전체 개수를 넣으면 정확히 한 바퀴만 돌고 멈춘다.",
+    )
+
+
+def _paced_wait_time(user) -> float:
+    """요청 "시작 시점" 사이의 간격이 --interval이 되도록 맞춘다(constant_pacing과 동일 원리).
+
+    단순히 매번 interval만큼 대기하면 실제 간격은 (interval + 직전 요청의 응답 latency)가
+    되어버린다 — interval이 클 때(10s 등)는 무시할 만하지만 작을 때(0.2s 등)는 이 오차가
+    상당한 비율을 차지해 baseline 테스트가 재려는 값 자체를 왜곡한다. Locust의
+    constant_pacing()은 값이 클래스 정의 시점에 고정돼야 해서, --interval처럼 CLI로만
+    정해지는(런타임에야 알 수 있는) 값엔 그대로 못 쓴다 — 그래서 직접 구현한다.
+    """
+    interval = user.environment.parsed_options.interval
+    now = time.time()
+    last = getattr(user, "_paced_last", None)
+    if last is None:
+        user._paced_last = now
+        return interval
+    delay = max(0.0, interval - (now - last))
+    user._paced_last = now + delay
+    return delay
+
+
+@events.test_start.add_listener
+def _setup_max_requests(environment, **kwargs) -> None:
+    max_requests = environment.parsed_options.max_requests
+    if not max_requests:
+        return
+    state = {"count": 0}
+
+    def _on_request(**kwargs) -> None:
+        state["count"] += 1
+        if state["count"] >= max_requests:
+            _debug(f"목표 요청 수({max_requests}) 도달 — 종료")
+            environment.runner.quit()
+
+    events.request.add_listener(_on_request)
 
 
 _debug("locustfile_baseline 모듈 로딩 시작")
@@ -80,7 +121,7 @@ if _cfg.backend == "milvus":
             )
 
         def wait_time(self) -> float:
-            return self.environment.parsed_options.interval
+            return _paced_wait_time(self)
 
         @task
         def search_one(self) -> None:
@@ -100,7 +141,7 @@ else:
         """반드시 -u 1 -r 1로 실행 (동시 사용자 1명 고정) — 순차 순회 + 고정 간격."""
 
         def wait_time(self) -> float:
-            return self.environment.parsed_options.interval
+            return _paced_wait_time(self)
 
         @task
         def search_one(self) -> None:
