@@ -87,7 +87,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "16"
+              value: "64"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -107,11 +107,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "500m"
+              memory: "768Mi"
             limits:
-              cpu: "1"
-              memory: "1.5Gi"
+              cpu: "2"
+              memory: "2Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -148,7 +148,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "16"
+              value: "64"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -168,11 +168,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "500m"
+              memory: "768Mi"
             limits:
-              cpu: "1"
-              memory: "1.5Gi"
+              cpu: "2"
+              memory: "2Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -209,7 +209,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "16"
+              value: "64"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -229,11 +229,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "500m"
+              memory: "768Mi"
             limits:
-              cpu: "1"
-              memory: "1.5Gi"
+              cpu: "2"
+              memory: "2Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -270,7 +270,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "16"
+              value: "64"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -290,11 +290,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "500m"
+              memory: "768Mi"
             limits:
-              cpu: "1"
-              memory: "1.5Gi"
+              cpu: "2"
+              memory: "2Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
@@ -331,7 +331,7 @@ spec:
             - name: REQUEST_INTERVAL_SEC  # 쿼리마다 API 호출 사이 대기 (소요시간 집계에서는 제외)
               value: "0"
             - name: RERANK_CONCURRENCY  # 큐로 동시에 흘려보낼 요청 수 (워커 풀 크기) — QPS는 latency 기반으로 계산
-              value: "16"
+              value: "64"
             - name: EMBEDDING_BATCH_SIZE
               value: "512"
             - name: EMBEDDING_TIMEOUT
@@ -351,11 +351,11 @@ spec:
               mountPath: /results
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "500m"
+              memory: "768Mi"
             limits:
-              cpu: "1"
-              memory: "1.5Gi"
+              cpu: "2"
+              memory: "2Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:
