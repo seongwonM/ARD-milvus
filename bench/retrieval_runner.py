@@ -67,6 +67,27 @@ def _build_index(
     chunk_timings: list[dict] = []
     insert_timings: list[dict] = []
 
+    def _flush() -> None:
+        nonlocal pending_bytes
+        n_rows = len(pending)
+        t_ins = time.time()
+        store._insert_with_retry(collection, pending)
+        ins_sec = time.time() - t_ins
+        insert_timings.append({
+            "batch_index": len(insert_timings),
+            "n_rows": n_rows,
+            "elapsed_sec": round(ins_sec, 4),
+            "sec_per_row": round(ins_sec / n_rows, 6) if n_rows else 0.0,
+        })
+        pending.clear()
+        pending_bytes = 0
+        elapsed = round(time.time() - t0, 1)
+        dps = round(pid / elapsed, 1) if elapsed > 0 else 0
+        logger.info(
+            f"  인덱싱: {pid:,}/{n_total:,}  elapsed={elapsed}s  ({dps} docs/s)  "
+            f"insert={round(ins_sec, 3)}s ({n_rows} rows)"
+        )
+
     for batch_idx, start in enumerate(range(0, n_total, batch_size)):
         chunk_ids = doc_ids[start: start + batch_size]
         texts = [
@@ -92,42 +113,19 @@ def _build_index(
 
         for doc_id, text, vec in zip(chunk_ids, texts, embs):
             trunc_text = _trunc(text)
+            row_bytes = store.estimate_row_bytes(doc_id, trunc_text, vec)
+            # 임베딩 배치(batch_size) 전체를 다 모은 "뒤에" 예산을 체크하면, 그 배치 하나가
+            # 이미 예산을 몇 배 넘긴 채로 쌓인 뒤에야 flush돼서 예산을 그대로 어긴다
+            # (2026-07 실측 — batch_size=512일 때 1024행까지 쌓여서야 flush됨). 그래서
+            # 행 하나 넣기 "전에" 매번 체크한다.
+            if pending and pending_bytes + row_bytes > insert_budget:
+                _flush()
             pending.append({"id": pid, "doc_id": doc_id, "text": trunc_text, "vector": vec.tolist()})
-            pending_bytes += store.estimate_row_bytes(doc_id, trunc_text, vec)
+            pending_bytes += row_bytes
             pid += 1
 
-        if pending_bytes >= insert_budget:
-            n_rows = len(pending)
-            t_ins = time.time()
-            store._insert_with_retry(collection, pending)
-            ins_sec = time.time() - t_ins
-            insert_timings.append({
-                "batch_index": len(insert_timings),
-                "n_rows": n_rows,
-                "elapsed_sec": round(ins_sec, 4),
-                "sec_per_row": round(ins_sec / n_rows, 6) if n_rows else 0.0,
-            })
-            pending.clear()
-            pending_bytes = 0
-            elapsed = round(time.time() - t0, 1)
-            dps = round(pid / elapsed, 1) if elapsed > 0 else 0
-            logger.info(
-                f"  인덱싱: {pid:,}/{n_total:,}  elapsed={elapsed}s  ({dps} docs/s)  "
-                f"insert={round(ins_sec, 3)}s ({n_rows} rows)"
-            )
-
     if pending:
-        n_rows = len(pending)
-        t_ins = time.time()
-        store._insert_with_retry(collection, pending)
-        ins_sec = time.time() - t_ins
-        insert_timings.append({
-            "batch_index": len(insert_timings),
-            "n_rows": n_rows,
-            "elapsed_sec": round(ins_sec, 4),
-            "sec_per_row": round(ins_sec / n_rows, 6) if n_rows else 0.0,
-        })
-        logger.info(f"  인덱싱: {pid:,}/{n_total:,}  insert={round(ins_sec, 3)}s ({n_rows} rows)")
+        _flush()
 
     store.finalize(collection)
     elapsed = round(time.time() - t0, 2)
