@@ -1,24 +1,32 @@
-# 부하테스트 디버그/보조 Pod — sleep infinity로 띄워둔다. 두 가지 용도:
-#   1) 준비 → 테스트 A → 테스트 B → 리포트를 손으로 하나씩 실행해보고 싶을 때
-#      (평소엔 loadtest/k8s/locust-job.yaml이 전부 자동으로 해준다 — 그쪽을 기본으로 쓸 것)
+# 부하테스트 디버그/보조 Pod. 뜨자마자 컨테이너가 스스로 준비 단계(쿼리/corpus
+# 벡터 캐싱 + milvus 색인)를 끝내놓고 sleep infinity로 넘어간다 — 캐싱/색인
+# 스크립트는 이미 되어있으면 스킵하는 로직이 있어서, 파드를 새로 띄워도(재배포
+# 해도) 보통 몇 초 안에 끝난다. milvus/minio가 아직 안 떠있으면 최대 10분(60회 x
+# 10s) 재시도하며 기다린다 — 이 파드보다 milvus/minio 배포가 늦게 끝나도 안전.
+# 용도:
+#   1) 준비 → 테스트 A → 테스트 B → 리포트를 손으로 하나씩 실행해보고 싶을 때,
+#      또는 locust 웹 UI(브라우저)로 직접 파라미터를 조작하며 확인하고 싶을 때
+#      (완전 자동 파이프라인은 loadtest/k8s/locust-job.yaml — 평소엔 그쪽 사용)
 #   2) fetch-results.sh가 Job 완료 후 PVC(loadtest-results)를 읽어오는 통로로 사용
 #
 # (이미지는 loadtest/** push 시 .github/workflows/build-push-loadtest.yml이 자동으로 빌드/푸시하고
 #  아래 image 태그도 자동 갱신한다 — loadtest/Dockerfile 참고)
 #
+# 사전 준비: milvus/minio를 먼저(또는 이 파드와 거의 동시에) 배포해둘 것
+#   kubectl apply -f loadtest/k8s/minio.yaml -n <namespace>
+#   kubectl apply -f loadtest/k8s/milvus.yaml -n <namespace>
+#
 # 실행: kubectl apply -f loadtest/k8s/locust-pod.yaml -n <namespace>
 #   (loadtest/k8s/pvc.yaml이 먼저 적용되어 있어야 함 — fetch-results.sh는 이 apply를 대신 해줌)
+# 준비 완료 확인: kubectl logs locust-loadtest -n <namespace>  ("[entrypoint] 준비 완료" 나오면 끝)
 # 접속: kubectl exec -it locust-loadtest -n <namespace> -- /bin/sh
 #
-#   # 0) 쿼리/corpus 임베딩 캐싱 (1회성, 백엔드와 무관 — 공유 캐시)
-#   $ python -m milvus_migration.loadtest.cache_query_vectors --data-root /data
-#   $ python -m milvus_migration.loadtest.cache_chunk_vectors --data-root /data
+#   # 웹 UI 모드로 직접 클릭하며 확인 (User count/Spawn rate를 브라우저에서 입력)
+#   $ locust -f milvus_migration/loadtest/locustfile_baseline.py --web-host 0.0.0.0
+#   (다른 터미널에서) kubectl port-forward pod/locust-loadtest 8089:8089 -n <namespace>
+#   브라우저로 localhost:8089 접속
 #
-#   # 1) 65,000개 chunk 색인 (캐시된 벡터 삽입 — 기본은 milvus, 아래 env로 전환)
-#   $ python -m milvus_migration.loadtest.seed_collection --data-root /data
-#   $ VECTOR_BACKEND=starrocks python -m milvus_migration.loadtest.seed_collection --data-root /data
-#
-#   # 2) 테스트 A: 기준선 (N값을 바꿔가며 여러 번 — 예시 2개)
+#   # 또는 headless로 테스트 A: 기준선 (N값을 바꿔가며 여러 번 — 예시 2개)
 #   $ locust -f milvus_migration/loadtest/locustfile_baseline.py --headless \
 #       -u 1 -r 1 --run-time 3m --interval 10 \
 #       --csv=/results/baseline_N10 --logfile=/results/baseline_N10.log
@@ -26,14 +34,17 @@
 #       -u 1 -r 1 --run-time 3m --interval 2 \
 #       --csv=/results/baseline_N2 --logfile=/results/baseline_N2.log
 #
-#   # 3) 테스트 A 결과로 STAGES 값을 확인/조정한 뒤 테스트 B 실행
+#   # 테스트 A 결과로 STAGES 값을 확인/조정한 뒤 테스트 B 실행
 #   $ locust -f milvus_migration/loadtest/locustfile_ramp.py --headless \
 #       --logfile=/results/ramp.log --html=/results/ramp.html \
 #       --csv=/results/ramp --request-log=/results/ramp_requests.csv
 #
-#   # 4) 리포트
+#   # 리포트
 #   $ python -m milvus_migration.loadtest.report ramp \
 #       --request-log /results/ramp_requests.csv --logfile /results/ramp.log
+#
+# starrocks로 테스트하려면 색인/locust 실행 전에 export VECTOR_BACKEND=starrocks
+# (색인은 밀버스/스타락스 재캐싱 없이 캐시된 벡터를 그대로 재사용)
 #
 # 결과 확인: ./loadtest/k8s/fetch-results.sh <namespace>  (권장 — 대기+복사 자동화)
 #   또는 수동: kubectl cp <namespace>/locust-loadtest:/results ./results
@@ -51,7 +62,21 @@ spec:
     - name: locust-loadtest
       image: ghcr.io/seongwonm/ard-milvus-loadtest:849e87fe8d26d06d853b485e725601a020bd7eb8
       imagePullPolicy: Always
-      command: ["sleep", "infinity"]
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -x
+          python -m milvus_migration.loadtest.cache_query_vectors --data-root /data
+          python -m milvus_migration.loadtest.cache_chunk_vectors --data-root /data
+          for i in $(seq 1 60); do
+            python -m milvus_migration.loadtest.seed_collection --data-root /data && break
+            echo "milvus 아직 준비 안됨, 재시도 ($i/60)"
+            sleep 10
+          done
+          echo "[entrypoint] 준비 완료"
+          sleep infinity
+      ports:
+        - containerPort: 8089  # locust 웹 UI — kubectl port-forward로 접속
       env:
         - name: MILVUS_URI  # loadtest/k8s/milvus.yaml의 서비스 이름 — bench용 "milvus"와 충돌 방지
           value: "http://milvus-loadtest:19530"
