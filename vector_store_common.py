@@ -15,15 +15,15 @@ _SEARCH_CHUNK = 128     # 배치당 쿼리 수 (Milvus gRPC 메시지 크기 제
 # (행수 기준 공유는 안전함 — 64행이면 어느 모델/차원이든 SQL 텍스트가 몇 MB 수준이라 문제 없음.)
 _INSERT_BATCH = 64
 
-# bench/retrieval_runner.py의 _build_index()가 쓰는 insert 배치 바이트 예산 — 백엔드 간 공유.
-# 한때 StarRocks에 이 20MB를 그대로 썼더니 모델 상관없이 첫 insert에서 BE가 OOMKilled돼서
-# StarRocks만 8MB로 따로 낮췄었는데(2026-07 실측), 근본 원인이 배치 크기 자체가 아니라
-# jemalloc이 해제한 메모리를 OS에 안 돌려주는 문제(StarRocks#67607)로 확인돼 k8s/starrocks.yaml/
-# loadtest/k8s/starrocks.yaml에 MALLOC_CONF(dirty_decay_ms/muzzy_decay_ms 단축)를 추가했다.
-# 이 완화책을 믿고 다시 Milvus와 동일한 값으로 통일한다 — 그래도 재발하면 원인이 배치 크기
-# (또는 jemalloc 튜닝으로 완전히 못 잡는 다른 메모리 문제)일 가능성이 남아있다는 뜻이니
-# starrocks_store.py의 8MB 폴백으로 다시 낮출 것.
-_INSERT_BUDGET_BYTES = 20_000_000
+# bench/retrieval_runner.py의 _build_index()가 쓰는 insert 배치 바이트 예산은 백엔드 간
+# 공유하지 않는다. StarRocks에 이 20MB를 그대로 썼더니 모델 상관없이 첫 insert에서 BE가
+# OOMKilled됐고(2026-07 실측), MALLOC_CONF(dirty_decay_ms/muzzy_decay_ms를 0으로) 튜닝을
+# 넣어도 동일하게 재발했다 — jemalloc 미반환 문제가 아니라, 20MB짜리 SQL 텍스트를 파싱하는
+# 순간 실제로 살아있는(active) 메모리 자체가 크다는 뜻으로 보인다(allocator 튜닝으로 못
+# 고치는 종류). SQL 텍스트로 파싱/실행하는 StarRocks의 INSERT는 Milvus의 바이너리 gRPC
+# 삽입보다 바이트당 메모리 비용이 훨씬 커서, 같은 바이트 수라도 실제 메모리 부담이 다르다.
+# 각 store가 자기 프로토콜에 맞는 안전한 값을 따로 갖는다(Milvus: milvus_store.py의
+# _INSERT_BUDGET_BYTES, StarRocks: starrocks_store.py 자체 값 8MB).
 
 
 def _trunc(text: str) -> str:

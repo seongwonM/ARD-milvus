@@ -31,13 +31,18 @@ import time
 
 import numpy as np
 
-from .vector_store_common import _INSERT_BATCH, _INSERT_BUDGET_BYTES, _TEXT_MAX_BYTES, _trunc
+from .vector_store_common import _INSERT_BATCH, _TEXT_MAX_BYTES, _trunc
 
 logger = logging.getLogger(__name__)
 
-# max_allowed_packet을 이 값으로 올려서(SET GLOBAL/SESSION) Milvus와 공유하는 20MB 예산을
-# 넉넉히(3배) 수용한다.
+# max_allowed_packet을 이 값으로 올려서(SET GLOBAL/SESSION) 프로토콜 패킷 한도에 여유를 둔다.
 _TARGET_MAX_PACKET_BYTES = 64 * 1024 * 1024
+
+# bench/retrieval_runner.py의 _build_index()가 쓰는 insert 배치 바이트 예산 — 실측으로
+# 안전했던 값(1/4 max_packet, 당시 기본 32MB 기준 8MB). Milvus의 20MB와 공유하지 않는다
+# (2026-07 실측: 20MB로 통일했더니 모델 상관없이 첫 insert에서 BE OOMKilled, MALLOC_CONF
+# 튜닝을 넣어도 동일하게 재발 — vector_store_common.py 주석 참고).
+_STARROCKS_INSERT_BUDGET_BYTES = 8 * 1024 * 1024
 
 
 def _vec_literal(vec) -> str:
@@ -218,13 +223,11 @@ class StarRocksStore:
         """bench/retrieval_runner.py의 _build_index()가 한 번의 INSERT SQL에 몇
         바이트어치를 모아 보낼지 결정할 때 쓰는 예산.
 
-        Milvus와 동일한 _INSERT_BUDGET_BYTES(20MB, vector_store_common)를 쓴다 —
-        vector_store_common.py 상단 주석 참고(MALLOC_CONF 완화책을 믿고 다시 통일함.
-        재발하면 8MB(1/4 max_packet, 2026-07에 안전했던 값)로 낮출 것). 혹시 서버 쪽
-        max_allowed_packet이 이 값보다도 작게 조회되면(폴백 등) 실제 한도의 절반을
-        넘지 않도록 안전판을 둔다.
+        _STARROCKS_INSERT_BUDGET_BYTES(8MB, 실측으로 안전했던 값)를 쓴다 — Milvus의
+        20MB와는 공유하지 않는다(파일 상단 주석 참고). 혹시 서버 쪽 max_allowed_packet이
+        이 값보다도 작게 조회되면(폴백 등) 실제 한도의 절반을 넘지 않도록 안전판을 둔다.
         """
-        return min(_INSERT_BUDGET_BYTES, self._max_packet_bytes // 2)
+        return min(_STARROCKS_INSERT_BUDGET_BYTES, self._max_packet_bytes // 2)
 
     def estimate_row_bytes(self, doc_id: str, text: str, vector) -> int:
         """이 행이 INSERT SQL에 실제로 차지할 바이트 수 — 정확히 그 SQL 조각을
