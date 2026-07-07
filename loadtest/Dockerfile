@@ -18,9 +18,11 @@
 #   docker push <registry>/ard-milvus-loadtest:manual
 FROM python:3.12-slim
 
-# entrypoint.sh가 자기 자신의 milvus/minio를 apply/delete하는 데 필요 (loadtest/k8s/rbac.yaml로 권한 부여)
+# entrypoint.sh가 자기 자신의 milvus/minio를 apply/delete하는 데 필요 (loadtest/k8s/rbac.yaml로 권한 부여).
+# tar는 kubectl cp가 pod 안에서 결과를 스트리밍하는 데 필요(bench용 루트 Dockerfile도 동일한
+# 이유로 설치함) — 없으면 fetch-results.sh의 kubectl cp가 빈 결과를 만든다(2026-07-07 실측).
 ARG KUBECTL_VERSION=v1.31.0
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update && apt-get install -y --no-install-recommends curl tar \
     && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
     && chmod +x /usr/local/bin/kubectl \
     && rm -rf /var/lib/apt/lists/*
