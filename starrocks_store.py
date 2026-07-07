@@ -31,9 +31,14 @@ import time
 
 import numpy as np
 
-from .vector_store_common import _TEXT_MAX_BYTES, _trunc
+from .vector_store_common import _INSERT_BATCH, _INSERT_BUDGET_BYTES, _TEXT_MAX_BYTES, _trunc
 
 logger = logging.getLogger(__name__)
+
+# max_allowed_packet을 이 값으로 올려서(SET GLOBAL/SESSION) _INSERT_BUDGET_BYTES(bench 예산)를
+# 넉넉한 여유(약 3배)로 수용한다. 기존에 1/2 예산(16.7MB)이 프로토콜 한도의 99.94%까지 찼던
+# 걸 감안하면, 예산을 실제 한도에 바짝 붙여 잡는 건 위험하다(2026-07 실측).
+_TARGET_MAX_PACKET_BYTES = 64 * 1024 * 1024
 
 
 def _vec_literal(vec) -> str:
@@ -75,10 +80,18 @@ class StarRocksStore:
         except Exception as exc:
             logger.warning(f"[StarRocks] enable_experimental_vector 설정 실패(이미 켜져 있으면 무해): {exc}")
 
-        # insert_budget_bytes()가 실제 클러스터 설정을 기준으로 예산을 잡을 수 있도록
-        # max_allowed_packet(MySQL 프로토콜 — 세션/서버당 다르게 설정될 수 있음)을 직접
-        # 조회한다. 하드코딩된 값을 가정하지 않기 위함(2026-07 실측: 기본값 32MB로 가정한
-        # 계산도 실제로는 틀릴 수 있어 안전하게 클러스터에 직접 물어봄).
+        # max_allowed_packet(MySQL 프로토콜 패킷 한도)을 _TARGET_MAX_PACKET_BYTES로 올린다.
+        # GLOBAL은 이후 새로 열리는 커넥션(threadpool 재연결 등)에 자동 적용되고, SESSION은
+        # 이 초기 커넥션(bench처럼 재연결 없이 계속 쓰는 경우) 자신에게 즉시 적용하기 위함
+        # — GLOBAL만 설정하면 "현재 세션 제외 이후 세션부터 적용"이라 현재 커넥션엔 안 먹는다.
+        try:
+            self._exec_with_retry(f"SET GLOBAL max_allowed_packet = {_TARGET_MAX_PACKET_BYTES}")
+            self._exec(f"SET SESSION max_allowed_packet = {_TARGET_MAX_PACKET_BYTES}")
+        except Exception as exc:
+            logger.warning(f"[StarRocks] max_allowed_packet 상향 실패(권한 부족 등): {exc}")
+
+        # insert_budget_bytes()가 실제로 안전한 값을 반환하도록 클러스터에 직접 물어봐서
+        # 확인한다(위 SET이 실패했을 때의 안전판 — 하드코딩된 값을 가정하지 않기 위함).
         try:
             rows = self._fetchall("SHOW VARIABLES LIKE 'max_allowed_packet'")
             self._max_packet_bytes = int(rows[0][1])
@@ -203,17 +216,17 @@ class StarRocksStore:
     # ── 데이터 삽입 ──────────────────────────────────────────────────────────
 
     def insert_budget_bytes(self) -> int:
-        """호출자(bench/retrieval_runner.py, upload())가 한 번의 INSERT SQL에
-        몇 바이트어치를 모아 보낼지 결정할 때 쓰는 예산.
+        """bench/retrieval_runner.py의 _build_index()가 한 번의 INSERT SQL에 몇
+        바이트어치를 모아 보낼지 결정할 때 쓰는 예산.
 
-        실제 조회한 max_allowed_packet의 1/4만 쓴다. 행 하나의 바이트 수는
-        estimate_row_bytes()가 실제 SQL 조각을 만들어 정확히 재지만, 그래도
-        여유를 넉넉히 두는 이유: 이 SQL 텍스트 자체의 바이트 수 말고도 MySQL
-        프로토콜 패킷 헤더, 다른 세션의 동시 사용 등 우리가 안 재는 오버헤드가
-        더 있을 수 있다. 절반(1/2)으로는 실측치가 예산의 99.94%까지 차서(748행,
-        16,766,831B vs 예산 16,777,216B) 여유가 사실상 없었다(2026-07 실측).
+        Milvus와 동일하게 _INSERT_BUDGET_BYTES(vector_store_common)를 그대로 쓴다 —
+        예전엔 이 값을 max_allowed_packet의 1/4로 자체 계산해서 Milvus의 고정 예산과
+        어긋났다(배치 크기 차이가 백엔드 비교에 섞이는 문제). __init__에서
+        max_allowed_packet을 이 예산보다 넉넉히(3배) 올려두므로 정상적으론 그대로
+        반환하면 되고, 혹시 그 SET이 권한 등으로 실패해 서버 쪽 한도가 여전히 낮다면
+        실제 한도의 절반을 넘지 않도록 안전판을 둔다.
         """
-        return self._max_packet_bytes // 4
+        return min(_INSERT_BUDGET_BYTES, self._max_packet_bytes // 2)
 
     def estimate_row_bytes(self, doc_id: str, text: str, vector) -> int:
         """이 행이 INSERT SQL에 실제로 차지할 바이트 수 — 정확히 그 SQL 조각을
@@ -223,22 +236,25 @@ class StarRocksStore:
         return len(frag.encode("utf-8"))
 
     def upload(self, name: str, data_iter) -> int:
-        """(id, doc_id, text, vector) 이터레이터를 받아 삽입. vector: np.ndarray 또는 list."""
+        """(id, doc_id, text, vector) 이터레이터를 받아 삽입. vector: np.ndarray 또는 list.
+
+        배치 행수는 Milvus(milvus_store.py)와 동일하게 고정 _INSERT_BATCH를 쓴다 —
+        예전엔 여기서 max_allowed_packet 기반 바이트 예산으로 배치를 쪼개서(약 370행)
+        Milvus의 고정 64행보다 훨씬 컸다. 백엔드 간 배치 크기 차이가 로드테스트 비교에
+        섞이면 안 되므로 통일한다(행당 바이트가 커도 64행이면 max_allowed_packet에
+        걸릴 일이 없어 별도 바이트 체크가 필요 없다).
+        """
         batch: list[dict] = []
-        batch_bytes = 0
         total = 0
-        budget = self.insert_budget_bytes()
 
         for pid, doc_id, text, vec in data_iter:
             text = _trunc(text)
-            row_bytes = self.estimate_row_bytes(doc_id, text, vec)
-            if batch and batch_bytes + row_bytes > budget:
+            batch.append({"id": pid, "doc_id": doc_id, "text": text, "vector": vec})
+
+            if len(batch) >= _INSERT_BATCH:
                 self._insert_with_retry(name, batch)
                 total += len(batch)
                 batch.clear()
-                batch_bytes = 0
-            batch.append({"id": pid, "doc_id": doc_id, "text": text, "vector": vec})
-            batch_bytes += row_bytes
 
         if batch:
             self._insert_with_retry(name, batch)

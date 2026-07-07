@@ -16,14 +16,13 @@ import numpy as np
 # StarRocksStore와 공유(백엔드 비교 벤치마크의 공정성을 위해 값을 하나로 통일) —
 # 기존 코드가 `from .milvus_store import _trunc, _TEXT_MAX_BYTES, _SEARCH_CHUNK`로
 # 가져다 쓰던 것도 그대로 동작하도록 여기서 재노출한다.
-from .vector_store_common import _SEARCH_CHUNK, _TEXT_MAX_BYTES, _trunc
-
-_INSERT_BATCH = 64
-
-# bench/retrieval_runner.py가 청크를 얼마나 모아서 한 번에 _insert_with_retry로
-# 넘길지 계산할 때 쓰는 예산 — gRPC 기본 메시지 크기 제한(64MB)보다 한참
-# 여유있게(고차원 모델에서 batch가 너무 크면 "received message larger than max" 에러가 남).
-_INSERT_BUDGET_BYTES = 20_000_000
+from .vector_store_common import (
+    _INSERT_BATCH,
+    _INSERT_BUDGET_BYTES,
+    _SEARCH_CHUNK,
+    _TEXT_MAX_BYTES,
+    _trunc,
+)
 
 logger = logging.getLogger(__name__)
 
