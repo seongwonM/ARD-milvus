@@ -35,9 +35,8 @@ from .vector_store_common import _INSERT_BATCH, _INSERT_BUDGET_BYTES, _TEXT_MAX_
 
 logger = logging.getLogger(__name__)
 
-# max_allowed_packet을 이 값으로 올려서(SET GLOBAL/SESSION) _INSERT_BUDGET_BYTES(bench 예산)를
-# 넉넉한 여유(약 3배)로 수용한다. 기존에 1/2 예산(16.7MB)이 프로토콜 한도의 99.94%까지 찼던
-# 걸 감안하면, 예산을 실제 한도에 바짝 붙여 잡는 건 위험하다(2026-07 실측).
+# max_allowed_packet을 이 값으로 올려서(SET GLOBAL/SESSION) Milvus와 공유하는 20MB 예산을
+# 넉넉히(3배) 수용한다.
 _TARGET_MAX_PACKET_BYTES = 64 * 1024 * 1024
 
 
@@ -219,12 +218,11 @@ class StarRocksStore:
         """bench/retrieval_runner.py의 _build_index()가 한 번의 INSERT SQL에 몇
         바이트어치를 모아 보낼지 결정할 때 쓰는 예산.
 
-        Milvus와 동일하게 _INSERT_BUDGET_BYTES(vector_store_common)를 그대로 쓴다 —
-        예전엔 이 값을 max_allowed_packet의 1/4로 자체 계산해서 Milvus의 고정 예산과
-        어긋났다(배치 크기 차이가 백엔드 비교에 섞이는 문제). __init__에서
-        max_allowed_packet을 이 예산보다 넉넉히(3배) 올려두므로 정상적으론 그대로
-        반환하면 되고, 혹시 그 SET이 권한 등으로 실패해 서버 쪽 한도가 여전히 낮다면
-        실제 한도의 절반을 넘지 않도록 안전판을 둔다.
+        Milvus와 동일한 _INSERT_BUDGET_BYTES(20MB, vector_store_common)를 쓴다 —
+        vector_store_common.py 상단 주석 참고(MALLOC_CONF 완화책을 믿고 다시 통일함.
+        재발하면 8MB(1/4 max_packet, 2026-07에 안전했던 값)로 낮출 것). 혹시 서버 쪽
+        max_allowed_packet이 이 값보다도 작게 조회되면(폴백 등) 실제 한도의 절반을
+        넘지 않도록 안전판을 둔다.
         """
         return min(_INSERT_BUDGET_BYTES, self._max_packet_bytes // 2)
 
