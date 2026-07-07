@@ -53,7 +53,10 @@ deploy_backend() {
       ;;
     starrocks)
       kubectl apply -f "$K8S_DIR/starrocks.yaml" -n "$MILVUS_NAMESPACE"
-      kubectl wait --for=condition=Ready pod/starrocks-loadtest -n "$MILVUS_NAMESPACE" --timeout=300s
+      # milvus와 동일한 이유(디스크 attach 기반 스토리지클래스의 느린 프로비저닝) +
+      # 메모리 요청이 8Gi로 커서(OOMKilled 방지용 증설) 노드 스케줄링도 오래 걸릴 수 있어
+      # 300s로는 부족했음(2026-07-07 baseline interval=2에서 timeout 실측) → 600s로 완화.
+      kubectl wait --for=condition=Ready pod/starrocks-loadtest -n "$MILVUS_NAMESPACE" --timeout=600s
       ;;
     *)
       echo "알 수 없는 backend: $1 (milvus|starrocks만 지원)" >&2; exit 1 ;;
