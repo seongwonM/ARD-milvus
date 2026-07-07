@@ -26,6 +26,7 @@ Pipeline/retrieval_runner/loadtest 쪽 코드가 백엔드 차이를 신경 쓰�
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 import numpy as np
@@ -58,6 +59,12 @@ class StarRocksStore:
         self._host, self._port, self._user, self._password = host, port, user, password
         self._database = database
         self._pending_index_dim: dict[str, int] = {}  # create_collection()이 채우고 finalize()가 씀
+        # 커넥션을 스레드-로컬로 둔다: loadtest는 이 인스턴스 하나를 gevent 내장
+        # threadpool(진짜 OS 스레드 여러 개)에서 동시에 호출하는데(threadpool_search_one),
+        # pymysql 커넥션 하나를 여러 스레드가 동시에 쓰면 MySQL 프로토콜 스트림이 깨져
+        # "Lost connection to MySQL server"가 난다(2026-07 실측). bench는 삽입을 단일
+        # 스레드로 순차 호출해서 이 문제가 안 보였을 뿐이다.
+        self._local = threading.local()
         self._connect()
         # allin1 이미지는 쿼리 포트(9030)가 열려도 FE가 DDL을 처리할 준비(리더 선출 등)가
         # 조금 더 걸릴 수 있어서, 최초 연결 직후의 DDL만 짧게 재시도한다.
@@ -82,10 +89,23 @@ class StarRocksStore:
         logger.info(f"[StarRocks] 연결: {host}:{port}/{database} (max_allowed_packet={self._max_packet_bytes:,}B)")
 
     def _connect(self) -> None:
-        self._conn = self._pymysql.connect(
+        """호출한 스레드용 커넥션을 새로 만든다(스레드-로컬)."""
+        self._local.conn = self._pymysql.connect(
             host=self._host, port=self._port, user=self._user, password=self._password,
             autocommit=True, connect_timeout=300, read_timeout=300, write_timeout=300,
         )
+
+    @property
+    def _conn(self):
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            # 이 스레드에서 처음 쓰는 커넥션 — 새로 만들고 DB를 선택해둔다
+            # (__init__을 실행한 스레드가 아닌 threadpool 워커 스레드에서 최초 호출될 때).
+            self._connect()
+            conn = self._local.conn
+            with conn.cursor() as cur:
+                cur.execute(f"USE `{self._database}`")
+        return conn
 
     def _is_connection_error(self, exc: Exception) -> bool:
         """커넥션 자체가 죽어서 그냥 재시도해봐야 소용없고 재연결이 필요한 경우인지 판별.
@@ -311,5 +331,19 @@ class StarRocksStore:
             f"ORDER BY approx_cosine_similarity({lit}, `vector`) DESC "
             f"LIMIT {int(top_k)}"
         )
-        rows = self._fetchall(sql)
-        return [(doc_id, float(score)) for doc_id, score in rows]
+        for attempt in range(3):
+            try:
+                rows = self._fetchall(sql)
+                return [(doc_id, float(score)) for doc_id, score in rows]
+            except Exception as exc:
+                logger.warning(
+                    f"  search 실패(시도 {attempt + 1}/3): {type(exc).__name__}: {exc}"
+                )
+                if attempt == 2:
+                    raise
+                if self._is_connection_error(exc):
+                    try:
+                        self._reconnect()
+                    except Exception as reconnect_exc:
+                        logger.warning(f"  재연결 실패: {reconnect_exc}")
+                time.sleep(2 ** attempt)
