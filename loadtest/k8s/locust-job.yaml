@@ -38,7 +38,7 @@ spec:
       serviceAccountName: loadtest-runner  # loadtest/k8s/rbac.yaml — 자기 ns의 milvus/minio를 스스로 apply/delete
       containers:
         - name: loadtest
-          image: ghcr.io/seongwonm/ard-milvus-loadtest:bb34af5c555c60ddba9740ad0d44ac98e32aa683
+          image: ghcr.io/seongwonm/ard-milvus-loadtest:2efc875300e41af960acf84f24de7b1d22d93d01
           imagePullPolicy: Always
           command: ["/bin/sh", "/app/milvus_migration/loadtest/entrypoint.sh"]
           env:
