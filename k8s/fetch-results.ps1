@@ -19,54 +19,63 @@ param(
     [string]$Stage = "all",
     [string]$OutDir = "results",
     [string]$Namespace = "user-x0179564",
+    [string]$StarrocksNamespace = "user-x0179564-starrocks",
     [int]$TimeoutSec = 3600
 )
 
 $ErrorActionPreference = "Stop"
 $nsArgs = @()
 if ($Namespace) { $nsArgs = @("-n", $Namespace) }
+$nsArgsStarrocks = @()
+if ($StarrocksNamespace) { $nsArgsStarrocks = @("-n", $StarrocksNamespace) }
 $DebugPod = "ard-milvus"
 
 function Ensure-DebugPod {
-    Write-Host "디버그 pod($DebugPod) 준비 중 (PVC 읽기 통로)..."
-    kubectl @nsArgs apply -f "$PSScriptRoot/pod.yaml" | Out-Null
-    kubectl @nsArgs wait --for=condition=Ready "pod/$DebugPod" --timeout=180s
+    param([string[]]$NsArgs)
+
+    Write-Host "디버그 pod($DebugPod) 준비 중 (PVC 읽기 통로, namespace=$($NsArgs[1]))..."
+    kubectl @NsArgs apply -f "$PSScriptRoot/pod.yaml" | Out-Null
+    kubectl @NsArgs wait --for=condition=Ready "pod/$DebugPod" --timeout=180s
     if ($LASTEXITCODE -ne 0) {
-        throw "디버그 pod($DebugPod)가 준비되지 않았습니다. 'kubectl describe pod $DebugPod'로 확인하세요."
+        throw "디버그 pod($DebugPod)가 준비되지 않았습니다. 'kubectl describe pod $DebugPod -n $($NsArgs[1])'로 확인하세요."
     }
 }
 
 function Wait-AndFetch {
-    param([string]$JobName, [string]$RemotePath, [string]$LocalPath)
+    param([string]$JobName, [string]$RemotePath, [string]$LocalPath, [string[]]$NsArgs)
 
-    Write-Host "[$JobName] 완료 대기 중 (timeout=${TimeoutSec}s)..."
-    kubectl wait @nsArgs --for=condition=complete "job/$JobName" --timeout="${TimeoutSec}s"
+    Write-Host "[$JobName] 완료 대기 중 (namespace=$($NsArgs[1]), timeout=${TimeoutSec}s)..."
+    kubectl wait @NsArgs --for=condition=complete "job/$JobName" --timeout="${TimeoutSec}s"
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "[$JobName] 완료 대기 실패 — 'kubectl logs job/$JobName' 로 상태를 확인하세요."
+        Write-Warning "[$JobName] 완료 대기 실패 — 'kubectl logs job/$JobName -n $($NsArgs[1])' 로 상태를 확인하세요."
         return
     }
 
     New-Item -ItemType Directory -Force -Path $LocalPath | Out-Null
     Write-Host "[$JobName] $DebugPod(같은 PVC) → $LocalPath 로 결과 복사 중..."
-    kubectl @nsArgs cp "${DebugPod}:${RemotePath}" $LocalPath
+    kubectl @NsArgs cp "${DebugPod}:${RemotePath}" $LocalPath
 
-    kubectl @nsArgs logs "job/$JobName" | Out-File -Encoding utf8 "$OutDir\$JobName.log"
+    kubectl @NsArgs logs "job/$JobName" | Out-File -Encoding utf8 "$OutDir\$JobName.log"
     Write-Host "[$JobName] 완료: $LocalPath  (로그: $OutDir\$JobName.log)"
 }
 
-Ensure-DebugPod
+if ($Stage -eq "retrieval" -or $Stage -eq "rerank" -or $Stage -eq "all") {
+    Ensure-DebugPod -NsArgs $nsArgs
+}
 
 if ($Stage -eq "retrieval" -or $Stage -eq "all") {
     foreach ($job in @("bench-retrieval-hcp", "bench-retrieval-m3", "bench-retrieval-qwen3")) {
-        Wait-AndFetch -JobName $job -RemotePath "/results/retrieval" -LocalPath "$OutDir\retrieval"
+        Wait-AndFetch -JobName $job -RemotePath "/results/retrieval" -LocalPath "$OutDir\retrieval" -NsArgs $nsArgs
     }
 }
 
 if ($Stage -eq "retrieval-starrocks" -or $Stage -eq "all") {
-    # k8s/bench-jobs-starrocks.yaml Job들. 결과는 별도 경로(/results/retrieval-starrocks)에 저장됨
-    # (Milvus 쪽 /results/retrieval과 파일명이 겹치지 않도록).
+    # k8s/bench-jobs-starrocks.yaml Job들은 별도 네임스페이스($StarrocksNamespace)에서 돎.
+    # 결과는 별도 경로(/results/retrieval-starrocks)에 저장됨(Milvus 쪽 /results/retrieval과
+    # 파일명이 겹치지 않도록).
+    Ensure-DebugPod -NsArgs $nsArgsStarrocks
     foreach ($job in @("bench-retrieval-hcp-starrocks", "bench-retrieval-m3-starrocks", "bench-retrieval-qwen3-starrocks")) {
-        Wait-AndFetch -JobName $job -RemotePath "/results/retrieval-starrocks" -LocalPath "$OutDir\retrieval-starrocks"
+        Wait-AndFetch -JobName $job -RemotePath "/results/retrieval-starrocks" -LocalPath "$OutDir\retrieval-starrocks" -NsArgs $nsArgsStarrocks
     }
 }
 
@@ -79,6 +88,6 @@ if ($Stage -eq "rerank" -or $Stage -eq "all") {
     $topNs = @(5, 10, 20, 50, 100)
     $rerankJobs = @("bge", "qwen3") | ForEach-Object { $r = $_; $topNs | ForEach-Object { "bench-rerank-$r-top$_" } }
     foreach ($job in $rerankJobs) {
-        Wait-AndFetch -JobName $job -RemotePath "/results/rerank" -LocalPath "$OutDir\rerank"
+        Wait-AndFetch -JobName $job -RemotePath "/results/rerank" -LocalPath "$OutDir\rerank" -NsArgs $nsArgs
     }
 }
