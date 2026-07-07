@@ -5,28 +5,29 @@
 # (캐시를 따로 빼는 스크립트는 없음 — /results 전체를 복사하는 것으로 충분).
 #
 # Job의 pod는 완료(Completed)되면 컨테이너가 종료돼서 kubectl cp/exec가 안 되므로,
-# 같은 PVC(loadtest-results, RWX)를 마운트한 채 계속 떠있는 디버그 pod
-# (loadtest/k8s/locust-pod.yaml)를 통해 복사한다. 데이터 자체는 PVC에 남아있고,
-# 이 pod는 그걸 읽어오는 통로 역할만 한다.
+# 같은 PVC(loadtest-results, RWX)를 마운트한 채 sleep infinity만 하는 순수 디버그 pod
+# (loadtest/k8s/debug-pod.yaml)를 통해 복사한다. 데이터 자체는 PVC에 남아있고,
+# 이 pod는 그걸 읽어오는 통로 역할만 한다 — locust-pod.yaml은 캐싱/색인까지 직접
+# 실행하는 파드라 fetch 용도로는 부적절해서 안 씀.
 #
 # 사용법:
 #   ./loadtest/k8s/fetch-results.sh <namespace> [출력디렉토리] [timeout]
-#   ./loadtest/k8s/fetch-results.sh milvus-loadtest
-#   ./loadtest/k8s/fetch-results.sh milvus-loadtest results-loadtest 21600s
+#   ./loadtest/k8s/fetch-results.sh user-x0179564-loadtest
+#   ./loadtest/k8s/fetch-results.sh user-x0179564-loadtest results-loadtest 21600s
 #
 # 기본 timeout(21600s=6h)은 BACKENDS(기본 milvus+starrocks 둘 다) 순회 기준 —
 # locust-job.yaml의 activeDeadlineSeconds와 맞춰뒀다. 백엔드 하나만 돌린다면 줄여도 됨.
 set -euo pipefail
 
-NAMESPACE="${1:?namespace를 첫 번째 인자로 넘겨주세요 (예: ./loadtest/k8s/fetch-results.sh milvus-loadtest)}"
+NAMESPACE="${1:?namespace를 첫 번째 인자로 넘겨주세요 (예: ./loadtest/k8s/fetch-results.sh user-x0179564-loadtest)}"
 OUT_DIR="${2:-results-loadtest}"
 TIMEOUT="${3:-21600s}"
 JOB_NAME="milvus-loadtest"
-DEBUG_POD="locust-loadtest"
+DEBUG_POD="loadtest-debug"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "디버그 pod($DEBUG_POD) 준비 중 (PVC 읽기 통로)..."
-kubectl apply -f "$SCRIPT_DIR/locust-pod.yaml" -n "$NAMESPACE"
+kubectl apply -f "$SCRIPT_DIR/debug-pod.yaml" -n "$NAMESPACE"
 kubectl wait --for=condition=Ready "pod/$DEBUG_POD" -n "$NAMESPACE" --timeout=180s
 
 echo "[$JOB_NAME] 완료 대기 중 (timeout=$TIMEOUT)..."

@@ -1,0 +1,39 @@
+# 순수 디버그 pod — PVC(loadtest-results)를 읽어오는 통로 전용. sleep infinity만
+# 실행하고 cache_query_vectors/seed_collection 같은 준비 로직은 전혀 돌리지 않는다
+# (그건 locust-pod.yaml/locust-job.yaml 쪽 역할). fetch-results.sh가 이 pod를 통해
+# kubectl cp로 결과를 로컬로 복사한다.
+#
+# 실행: kubectl apply -f loadtest/k8s/debug-pod.yaml -n <namespace>
+# 접속: kubectl exec -it loadtest-debug -n <namespace> -- /bin/sh
+# 결과 확인: kubectl cp <namespace>/loadtest-debug:/results ./results
+# 삭제: kubectl delete pod loadtest-debug -n <namespace>
+#
+# (이미지는 loadtest/** push 시 .github/workflows/build-push-loadtest.yml이 자동으로
+#  빌드/푸시하고 아래 image 태그도 자동 갱신한다 — loadtest/Dockerfile 참고)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: loadtest-debug
+  labels:
+    app: loadtest-debug
+spec:
+  restartPolicy: Never
+  containers:
+    - name: loadtest-debug
+      image: ghcr.io/seongwonm/ard-milvus-loadtest:37da249517dda5d9e120d2fdad69fb9d2a9e443e
+      imagePullPolicy: Always
+      command: ["sleep", "infinity"]
+      volumeMounts:
+        - name: loadtest-results
+          mountPath: /results
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "256Mi"
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+  volumes:
+    - name: loadtest-results
+      persistentVolumeClaim:
+        claimName: loadtest-results
