@@ -12,3 +12,4 @@ venv/
 loadtest/cache/
 results/*
 !results/.gitkeep
+results-loadtest/
