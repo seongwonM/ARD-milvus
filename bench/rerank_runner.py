@@ -42,8 +42,8 @@ import numpy as np
 from milvus_migration.bench.data_loader import load_from_dir
 from milvus_migration.bench.evaluator import evaluate
 from milvus_migration.bench.reranker import RerankClient
-from milvus_migration.config import Config, EmbeddingConfig
-from milvus_migration.embedding import EmbeddingClient
+from milvus_migration.core.config import Config, EmbeddingConfig
+from milvus_migration.core.embedding import EmbeddingClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ def make_precomputed_embedding_score_fn(
 
     문서 배치는 concurrency로 동시에 흘려보낸다 — 한때 top_n별 pod 5개를 동시에 띄우면서
     "pod 안에서까지 동시에 쏘면 서버 부하가 이중으로 겹친다"는 이유로 순차 호출로 바꿨었는데,
-    이제 pod는 k8s/run-rerank-qwen3-sequential.ps1로 한 번에 하나씩만 실행되므로(2026-07-06)
+    이제 pod는 k8s/scripts/run-rerank-qwen3-sequential.ps1로 한 번에 하나씩만 실행되므로(2026-07-06)
     그 전제가 사라졌다. pod 하나만 서버를 쓰는 상황에서 문서 배치까지 순차로 가는 건
     불필요한 낭비라 다시 동시 처리로 되돌린다.
     """

@@ -3,7 +3,7 @@
 # (그건 locust-pod.yaml/locust-job.yaml 쪽 역할). fetch-results.sh가 이 pod를 통해
 # kubectl cp로 결과를 로컬로 복사한다.
 #
-# 실행: kubectl apply -f loadtest/k8s/debug-pod.yaml -n <namespace>
+# 실행: kubectl apply -f loadtest/k8s/debug/debug-pod.yaml -n <namespace>
 # 접속: kubectl exec -it loadtest-debug -n <namespace> -- /bin/sh
 # 결과 확인: kubectl cp <namespace>/loadtest-debug:/results ./results
 # 삭제: kubectl delete pod loadtest-debug -n <namespace>

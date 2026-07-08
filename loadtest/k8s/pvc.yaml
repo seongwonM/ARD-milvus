@@ -1,7 +1,7 @@
 # milvus-loadtest Job과 디버그 pod(locust-pod.yaml)가 결과 저장용으로 함께 쓰는 PVC.
 # fetch-results.sh는 Job이 끝난(컨테이너 종료된) 뒤에도 디버그 pod를 통해 같은 PVC를
 # 읽어야 하므로 ReadWriteMany(nfs 기반 StorageClass) 필수 — ReadWriteOnce면 두 pod가
-# 겹쳐 마운트하려 할 때 볼륨 attach 대기로 멈춘다 (k8s/bench-jobs.yaml과 동일한 이유).
+# 겹쳐 마운트하려 할 때 볼륨 attach 대기로 멈춘다 (k8s/jobs/bench-jobs.yaml과 동일한 이유).
 #
 # 실행(최초 1회): kubectl apply -f loadtest/k8s/pvc.yaml -n <namespace>
 apiVersion: v1

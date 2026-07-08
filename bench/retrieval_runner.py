@@ -31,10 +31,10 @@ import numpy as np
 
 from milvus_migration.bench.data_loader import load_from_dir
 from milvus_migration.bench.evaluator import evaluate
-from milvus_migration.config import Config
-from milvus_migration.embedding import EmbeddingClient
-from milvus_migration.store_factory import build_store
-from milvus_migration.vector_store_common import _trunc, _SEARCH_CHUNK
+from milvus_migration.core.config import Config
+from milvus_migration.core.embedding import EmbeddingClient
+from milvus_migration.core.store_factory import build_store
+from milvus_migration.core.vector_store_common import _trunc, _SEARCH_CHUNK
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)

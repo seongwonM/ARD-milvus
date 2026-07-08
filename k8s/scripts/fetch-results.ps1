@@ -9,10 +9,10 @@
   그걸 읽어오는 통로 역할만 합니다.
 
 .EXAMPLE
-  ./k8s/fetch-results.ps1 -Stage retrieval
-  ./k8s/fetch-results.ps1 -Stage retrieval-starrocks
-  ./k8s/fetch-results.ps1 -Stage rerank
-  ./k8s/fetch-results.ps1 -Stage all
+  ./k8s/scripts/fetch-results.ps1 -Stage retrieval
+  ./k8s/scripts/fetch-results.ps1 -Stage retrieval-starrocks
+  ./k8s/scripts/fetch-results.ps1 -Stage rerank
+  ./k8s/scripts/fetch-results.ps1 -Stage all
 #>
 param(
     [ValidateSet("retrieval", "retrieval-starrocks", "rerank", "all")]
@@ -34,7 +34,7 @@ function Ensure-DebugPod {
     param([string[]]$NsArgs)
 
     Write-Host "디버그 pod($DebugPod) 준비 중 (PVC 읽기 통로, namespace=$($NsArgs[1]))..."
-    kubectl @NsArgs apply -f "$PSScriptRoot/pod.yaml" | Out-Null
+    kubectl @NsArgs apply -f "$PSScriptRoot/../pod.yaml" | Out-Null
     kubectl @NsArgs wait --for=condition=Ready "pod/$DebugPod" --timeout=180s
     if ($LASTEXITCODE -ne 0) {
         throw "디버그 pod($DebugPod)가 준비되지 않았습니다. 'kubectl describe pod $DebugPod -n $($NsArgs[1])'로 확인하세요."
@@ -70,7 +70,7 @@ if ($Stage -eq "retrieval" -or $Stage -eq "all") {
 }
 
 if ($Stage -eq "retrieval-starrocks" -or $Stage -eq "all") {
-    # k8s/bench-jobs-starrocks.yaml Job들은 별도 네임스페이스($StarrocksNamespace)에서 돎.
+    # k8s/jobs/bench-jobs-starrocks.yaml Job들은 별도 네임스페이스($StarrocksNamespace)에서 돎.
     # 결과는 별도 경로(/results/retrieval-starrocks)에 저장됨(Milvus 쪽 /results/retrieval과
     # 파일명이 겹치지 않도록).
     Ensure-DebugPod -NsArgs $nsArgsStarrocks
@@ -81,7 +81,7 @@ if ($Stage -eq "retrieval-starrocks" -or $Stage -eq "all") {
 
 if ($Stage -eq "rerank" -or $Stage -eq "all") {
     # bge/qwen3 둘 다 top_n(5/10/20/50/100)별로 Job/pod가 분리되어 있음. bge는 5개를
-    # 동시에 적용해도 되지만, qwen3는 ./k8s/run-rerank-qwen3-sequential.ps1로 하나씩
+    # 동시에 적용해도 되지만, qwen3는 ./k8s/scripts/run-rerank-qwen3-sequential.ps1로 하나씩
     # 순차 실행해야 함(2026-07-06 — 5개 동시 실행 시 서로 API를 두들겨 밀리는 현상 +
     # 코퍼스/retrieval JSON 중복 로딩으로 인한 OOM 때문). 이 스크립트는 Job이 이미
     # 완료된 뒤 결과를 fetch만 하므로 순서는 상관없음.

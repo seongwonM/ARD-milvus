@@ -40,11 +40,11 @@ jobs:
       - name: Update image tags
         run: |
           sed -i "s|${{ env.IMAGE }}:.*|${{ env.IMAGE }}:${{ github.sha }}|" loadtest/k8s/locust-job.yaml
-          sed -i "s|${{ env.IMAGE }}:.*|${{ env.IMAGE }}:${{ github.sha }}|" loadtest/k8s/locust-pod.yaml
-          sed -i "s|${{ env.IMAGE }}:.*|${{ env.IMAGE }}:${{ github.sha }}|" loadtest/k8s/debug-pod.yaml
+          sed -i "s|${{ env.IMAGE }}:.*|${{ env.IMAGE }}:${{ github.sha }}|" loadtest/k8s/debug/locust-pod.yaml
+          sed -i "s|${{ env.IMAGE }}:.*|${{ env.IMAGE }}:${{ github.sha }}|" loadtest/k8s/debug/debug-pod.yaml
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add loadtest/k8s/locust-job.yaml loadtest/k8s/locust-pod.yaml loadtest/k8s/debug-pod.yaml
+          git add loadtest/k8s/locust-job.yaml loadtest/k8s/debug/locust-pod.yaml loadtest/k8s/debug/debug-pod.yaml
           git commit -m "ci: update loadtest image tag to ${{ github.sha }}"
           # main이 이 워크플로 실행 중에 앞으로 나가있으면(다른 push와 겹치면) 그냥
           # push가 non-fast-forward로 실패한다 — rebase 후 재시도해서 흡수한다.

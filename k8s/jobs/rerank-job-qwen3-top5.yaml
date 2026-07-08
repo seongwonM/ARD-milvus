@@ -1,5 +1,5 @@
 # Reranking Job — Qwen3-Embedding-8B, top_n=5 (embedding_cosine 방식).
-# k8s/rerank-job-qwen3-top{5,10,20,50,100}.yaml 5개 파일 + k8s/run-rerank-qwen3-sequential.ps1로
+# k8s/rerank-job-qwen3-top{5,10,20,50,100}.yaml 5개 파일 + k8s/scripts/run-rerank-qwen3-sequential.ps1로
 # 나뉘어 있습니다 — top_n마다 파드를 따로 띄우되(속도 측정을 top_n별로 격리하기 위해,
 # k8s/rerank-job-bge.yaml과 같은 이유), 5개를 동시에 띄우지는 않고 스크립트가 하나씩
 # 순서대로 적용 → 완료 대기 → 삭제 → 다음 top_n 적용을 반복합니다(2026-07-06).
@@ -13,7 +13,7 @@
 # 무너진다 — 그래서 pod는 여전히 분리하되, 실행만 순차로 바꿨다.
 #
 # 단독 실행: kubectl apply -f k8s/rerank-job-qwen3-top5.yaml
-# 전체 순차 실행: ./k8s/run-rerank-qwen3-sequential.ps1
+# 전체 순차 실행: ./k8s/scripts/run-rerank-qwen3-sequential.ps1
 apiVersion: batch/v1
 kind: Job
 metadata:

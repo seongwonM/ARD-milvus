@@ -1,12 +1,14 @@
-# Reranking Job — Qwen3-Embedding-8B, top_n=20 (embedding_cosine 방식).
+# Reranking Job — Qwen3-Embedding-8B, top_n=100 (embedding_cosine 방식).
 # 자세한 설명은 k8s/rerank-job-qwen3-top5.yaml 상단 주석 참고.
+# top_n이 커질수록 유니크 후보 문서(문서 벡터 캐시)가 늘어날 수 있어 top5/10/20보다
+# 메모리 여유를 조금 더 둠.
 #
-# 단독 실행: kubectl apply -f k8s/rerank-job-qwen3-top20.yaml
-# 전체 순차 실행: ./k8s/run-rerank-qwen3-sequential.ps1
+# 단독 실행: kubectl apply -f k8s/rerank-job-qwen3-top100.yaml
+# 전체 순차 실행: ./k8s/scripts/run-rerank-qwen3-sequential.ps1
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: bench-rerank-qwen3-top20
+  name: bench-rerank-qwen3-top100
 spec:
   backoffLimit: 0
   template:
@@ -24,7 +26,7 @@ spec:
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
                 --embedding-rerank-model Qwen3-Embedding-8B \
-                --top-n 20 \
+                --top-n 100 \
                 --data-root /data \
                 --out /results/rerank
           env:
@@ -52,10 +54,10 @@ spec:
           resources:
             requests:
               cpu: "500m"
-              memory: "1Gi"
+              memory: "1.5Gi"
             limits:
               cpu: "2"
-              memory: "3Gi"
+              memory: "4Gi"
       volumes:
         - name: bench-results
           persistentVolumeClaim:

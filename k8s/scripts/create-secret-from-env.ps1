@@ -9,8 +9,8 @@
   방식이라 이미 있는 시크릿/네임스페이스에 다시 실행해도 안전합니다(덮어쓰기).
 
 .EXAMPLE
-  ./k8s/create-secret-from-env.ps1 -Namespace user-x0179564-new
-  ./k8s/create-secret-from-env.ps1 -Namespace user-x0179564-new -EnvFile .env.prod
+  ./k8s/scripts/create-secret-from-env.ps1 -Namespace user-x0179564-new
+  ./k8s/scripts/create-secret-from-env.ps1 -Namespace user-x0179564-new -EnvFile .env.prod
 #>
 param(
     [Parameter(Mandatory=$true)]

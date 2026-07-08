@@ -14,7 +14,7 @@
 #
 # 실행: kubectl apply -f loadtest/k8s/locust-job.yaml -n <namespace>
 # 진행 확인: kubectl logs -f job/milvus-loadtest -n <namespace>
-# 결과 가져오기: ./loadtest/k8s/fetch-results.sh <namespace>
+# 결과 가져오기: ./loadtest/k8s/scripts/fetch-results.sh <namespace>
 # 재실행(값 조정 후): kubectl delete job milvus-loadtest -n <namespace> 후 다시 apply
 #   (milvus/minio는 Job이 시작/종료 시 스스로 정리하므로 사람이 신경 쓸 필요 없음)
 # 삭제: kubectl delete job milvus-loadtest -n <namespace>

@@ -53,9 +53,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from locust import LoadTestShape, User, constant, events, task
 
-from milvus_migration.config import Config
+from milvus_migration.core.config import Config
 from milvus_migration.loadtest.common import QueryCursor, _debug, build_store, load_query_cache, threadpool_search_one
-from milvus_migration.store_factory import collection_name
+from milvus_migration.core.store_factory import collection_name
 
 logger = logging.getLogger(__name__)
 

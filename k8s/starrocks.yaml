@@ -1,4 +1,4 @@
-# bench 전용 StarRocks manifest — k8s/milvus.yaml과 나란히 놓고 k8s/bench-jobs-starrocks.yaml로
+# bench 전용 StarRocks manifest — k8s/milvus.yaml과 나란히 놓고 k8s/jobs/bench-jobs-starrocks.yaml로
 # 동일한 retrieval(NDCG) 벤치마크를 돌려 백엔드 간 검색 품질/속도를 비교하기 위한 것.
 #
 # starrocks/allin1-ubuntu: FE+BE가 한 컨테이너에 다 들어있는 이미지 — Milvus의 단일

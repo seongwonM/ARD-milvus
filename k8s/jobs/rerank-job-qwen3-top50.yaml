@@ -4,7 +4,7 @@
 # 메모리 여유를 조금 더 둠.
 #
 # 단독 실행: kubectl apply -f k8s/rerank-job-qwen3-top50.yaml
-# 전체 순차 실행: ./k8s/run-rerank-qwen3-sequential.ps1
+# 전체 순차 실행: ./k8s/scripts/run-rerank-qwen3-sequential.ps1
 apiVersion: batch/v1
 kind: Job
 metadata:

@@ -1,5 +1,5 @@
 # 결과 공유용 PVC — retrieval/rerank Job들이 공통으로 마운트합니다.
-# k8s/bench-jobs.yaml에 같이 있던 걸 분리했습니다 — retrieval Job 없이 rerank만 돌릴 때도
+# k8s/jobs/bench-jobs.yaml에 같이 있던 걸 분리했습니다 — retrieval Job 없이 rerank만 돌릴 때도
 # (로컬에 이미 있는 top100 결과를 이 PVC에 직접 주입해서) 이 파일 하나만 먼저 적용하면 됩니다.
 #
 # 실행: kubectl apply -f k8s/bench-results-pvc.yaml

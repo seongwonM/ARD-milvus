@@ -2,13 +2,13 @@
 
 사용법:
     # 인덱싱 (JSON 파일)
-    python -m milvus_migration.main index --file docs.json
+    python -m milvus_migration.core.main index --file docs.json
 
     # 검색
-    python -m milvus_migration.main search --query "벡터 데이터베이스 추천" --top-k 5
+    python -m milvus_migration.core.main search --query "벡터 데이터베이스 추천" --top-k 5
 
     # 컬렉션 정보
-    python -m milvus_migration.main info
+    python -m milvus_migration.core.main info
 
 JSON 입력 형식:
     [

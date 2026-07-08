@@ -6,11 +6,11 @@
 
   Job의 pod는 완료(Completed)되면 컨테이너가 종료돼서 kubectl cp/exec가 안 되므로,
   같은 PVC(loadtest-results, RWX)를 마운트한 채 계속 떠있는 디버그 pod
-  (loadtest/k8s/debug-pod.yaml)를 통해 복사합니다.
+  (loadtest/k8s/debug/debug-pod.yaml)를 통해 복사합니다.
 
 .EXAMPLE
-  ./loadtest/k8s/fetch-results.ps1
-  ./loadtest/k8s/fetch-results.ps1 -Namespace user-x0179564-loadtest -OutDir results-loadtest
+  ./loadtest/k8s/scripts/fetch-results.ps1
+  ./loadtest/k8s/scripts/fetch-results.ps1 -Namespace user-x0179564-loadtest -OutDir results-loadtest
 #>
 param(
     [string]$Namespace = "user-x0179564-loadtest",
@@ -22,7 +22,7 @@ $JobName = "milvus-loadtest"
 $DebugPod = "loadtest-debug"
 
 Write-Host "디버그 pod($DebugPod) 준비 중 (PVC 읽기 통로, namespace=$Namespace)..."
-kubectl -n $Namespace apply -f "$PSScriptRoot/debug-pod.yaml" | Out-Null
+kubectl -n $Namespace apply -f "$PSScriptRoot/../debug/debug-pod.yaml" | Out-Null
 kubectl -n $Namespace wait --for=condition=Ready "pod/$DebugPod" --timeout=180s
 if ($LASTEXITCODE -ne 0) {
     throw "디버그 pod($DebugPod)가 준비되지 않았습니다. 'kubectl describe pod $DebugPod -n $Namespace'로 확인하세요."

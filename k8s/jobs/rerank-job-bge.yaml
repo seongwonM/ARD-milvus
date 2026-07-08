@@ -3,7 +3,7 @@
 # 합니다 — retrieval Job 3개(k8s/bench-jobs.yaml)를 돌려서 채우거나, 로컬에 이미 있는
 # top100 결과를 아래 "PVC 준비" 방법으로 직접 주입하세요.
 # 리랭커별로 파일을 분리했습니다(bge: 이 파일, qwen3: k8s/rerank-job-qwen3-top{5,10,20,50,100}.yaml,
-# ./k8s/run-rerank-qwen3-sequential.ps1로 순차 실행) —
+# ./k8s/scripts/run-rerank-qwen3-sequential.ps1로 순차 실행) —
 # 모델 하나당 5개(top_n=5/10/20/50/100) Job만 동시에 뜨게 해서 리소스 여유를 두기 위함.
 # top_n마다도 Job(pod)을 분리했습니다 — top_n을 한 pod에서 순차로 돌리면 뒤 top_n일수록
 # 느려지는지(캐시/스로틀링 등) top_n 자체의 속도 차이인지 구분이 안 돼서, top_n별로도
@@ -26,12 +26,12 @@
 # 삭제: kubectl delete job bench-rerank-bge-top5 bench-rerank-bge-top10 bench-rerank-bge-top20 \
 #   bench-rerank-bge-top50 bench-rerank-bge-top100
 # 로그: kubectl logs job/bench-rerank-bge-top5  (top_n별로 각각 확인)
-# 결과를 로컬로 자동 복사: ./k8s/fetch-results.ps1 -Stage rerank  (Job 완료까지 대기 후 results/에 저장)
+# 결과를 로컬로 자동 복사: ./k8s/scripts/fetch-results.ps1 -Stage rerank  (Job 완료까지 대기 후 results/에 저장)
 #
 # 리소스: rerank_runner.py가 순차 호출 대신 큐(워커 풀)로 동시에 여러 요청을 흘려보내도록
 # 바뀌면서 pod당 request 512Mi/limit 1.5Gi로 올림(원래는 256Mi대였음).
 # 이 파일 5개 Job 동시 적용 기준 합계 = request 2.5Gi / limit 7.5Gi, cpu request 1.25 / limit 5.
-# qwen3는 더 이상 5개를 동시에 안 띄우고 ./k8s/run-rerank-qwen3-sequential.ps1로 하나씩
+# qwen3는 더 이상 5개를 동시에 안 띄우고 ./k8s/scripts/run-rerank-qwen3-sequential.ps1로 하나씩
 # 순차 실행하므로(2026-07-06), 이 파일(bge 5개)과 동시에 적용해도 리소스 부담이 적음.
 #
 # RERANK_CONCURRENCY: 큐로 동시에 흘려보낼 요청 수. QPS는 총 소요시간이 아니라 API 응답

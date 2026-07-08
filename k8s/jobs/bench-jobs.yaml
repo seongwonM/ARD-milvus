@@ -1,7 +1,7 @@
 # Retrieval 3모델(HCP-LLM-Latest / bge-m3 / Qwen3-Embedding-8B) 벤치마크 Job.
 # (CI 재트리거용 사소한 주석 변경 — 기능 변화 없음)
 # Reranking은 k8s/rerank-job-bge.yaml, k8s/rerank-job-qwen3-top{5,10,20,50,100}.yaml(순차 실행은
-# ./k8s/run-rerank-qwen3-sequential.ps1) — 이 Job들이 모두 끝난 뒤 별도 적용하세요.
+# ./k8s/scripts/run-rerank-qwen3-sequential.ps1) — 이 Job들이 모두 끝난 뒤 별도 적용하세요.
 # Secret: milvus-migration-secret (EMBEDDING_API_ENDPOINT, EMBEDDING_API_KEY, MILVUS_TOKEN)
 #
 # PVC(bench-results)는 k8s/bench-results-pvc.yaml로 분리되어 있습니다 — retrieval/rerank Job이
@@ -13,7 +13,7 @@
 #   kubectl apply -f k8s/bench-jobs.yaml           # 3개 retrieval Job 생성
 # 삭제: kubectl delete job bench-retrieval-hcp bench-retrieval-m3 bench-retrieval-qwen3
 # 로그: kubectl logs job/bench-retrieval-hcp  (검색된 top-100 id 전체가 로그에 찍힘)
-# 결과를 로컬로 자동 복사: ./k8s/fetch-results.ps1 -Stage retrieval  (Job 완료까지 대기 후 results/에 저장)
+# 결과를 로컬로 자동 복사: ./k8s/scripts/fetch-results.ps1 -Stage retrieval  (Job 완료까지 대기 후 results/에 저장)
 #
 # retrieval 결과는 PVC(bench-results)에 남아있는 한 재사용됩니다 — 이미 저장된 모델은
 # retrieval_runner.py가 자동으로 재검색을 스킵합니다.

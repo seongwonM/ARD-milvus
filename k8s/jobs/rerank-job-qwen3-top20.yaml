@@ -1,12 +1,12 @@
-# Reranking Job — Qwen3-Embedding-8B, top_n=10 (embedding_cosine 방식).
+# Reranking Job — Qwen3-Embedding-8B, top_n=20 (embedding_cosine 방식).
 # 자세한 설명은 k8s/rerank-job-qwen3-top5.yaml 상단 주석 참고.
 #
-# 단독 실행: kubectl apply -f k8s/rerank-job-qwen3-top10.yaml
-# 전체 순차 실행: ./k8s/run-rerank-qwen3-sequential.ps1
+# 단독 실행: kubectl apply -f k8s/rerank-job-qwen3-top20.yaml
+# 전체 순차 실행: ./k8s/scripts/run-rerank-qwen3-sequential.ps1
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: bench-rerank-qwen3-top10
+  name: bench-rerank-qwen3-top20
 spec:
   backoffLimit: 0
   template:
@@ -24,7 +24,7 @@ spec:
                   /results/retrieval/hcp_llm_latest_top100.json \
                   /results/retrieval/bge_m3_top100.json \
                 --embedding-rerank-model Qwen3-Embedding-8B \
-                --top-n 10 \
+                --top-n 20 \
                 --data-root /data \
                 --out /results/rerank
           env:
