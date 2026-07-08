@@ -20,7 +20,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: loadtest-debug
-      image: ghcr.io/seongwonm/ard-milvus-loadtest:ed68ae7af71186deca7c4412a28f7e57e803d4b4
+      image: ghcr.io/seongwonm/ard-milvus-loadtest:1d37ccd47d6e3820a27448672c7a49d5f55fabdb
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
       volumeMounts:
