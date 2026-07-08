@@ -55,4 +55,11 @@ jobs:
           git config user.email "github-actions@github.com"
           git add k8s/pod.yaml k8s/jobs/bench-jobs.yaml k8s/jobs/bench-jobs-starrocks.yaml k8s/jobs/rerank-job-bge.yaml k8s/jobs/rerank-job-qwen3-top*.yaml
           git commit -m "ci: update image tag to ${{ github.sha }}"
-          git push
+          # main이 이 워크플로 실행 중에 앞으로 나가있으면(build-push-loadtest.yml과 동시
+          # 트리거되는 push 등) 그냥 push가 non-fast-forward로 실패한다 — rebase 후
+          # 재시도해서 흡수한다(2026-07-08 실제 발생).
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push && break
+            echo "push 실패, 재시도 ($i/5)"
+            sleep $((i * 3))
+          done
